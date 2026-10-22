@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BizChat widget sandbox</title>
+  </head>
+  <body style="margin: 0; min-height: 100vh; background: #ece9df; font-family: system-ui">
+    <main style="max-width: 720px; margin: auto; padding: 64px 24px">
+      <h1>Widget sandbox</h1>
+      <p>
+        This page deliberately has broad host styles. The BizChat widget remains isolated in its
+        Shadow Root.
+      </p>
+    </main>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const loader = document.createElement('script');
+      loader.type = 'module';
+      loader.src = '/src/loader.ts';
+      loader.dataset.bizchatLoader = 'true';
+      loader.dataset.business = params.get('business') || 'pub_replace_me';
+      loader.dataset.api = params.get('api') || 'http://localhost:4000';
+      document.body.append(loader);
+    </script>
+  </body>
+</html>

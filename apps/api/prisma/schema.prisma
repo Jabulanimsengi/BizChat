@@ -1,0 +1,788 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BusinessStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+  TRIAL
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum BusinessRole {
+  OWNER
+  ADMIN
+  SUPERVISOR
+  CONSULTANT
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  DISABLED
+}
+
+enum DomainStatus {
+  PENDING
+  VERIFIED
+  DISABLED
+}
+
+enum WidgetPosition {
+  BOTTOM_RIGHT
+  BOTTOM_LEFT
+}
+
+enum ConversationStatus {
+  NEW
+  QUEUED
+  ASSIGNED
+  ACTIVE
+  WAITING_FOR_CUSTOMER
+  WAITING_FOR_AGENT
+  RESOLVED
+  CLOSED
+}
+
+enum ConversationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum ConversationSource {
+  INTEGRATION
+  WEB_WIDGET
+  WHATSAPP
+  EMAIL
+  FACEBOOK
+  INSTAGRAM
+  SMS
+  MOBILE_APP
+}
+
+enum ParticipantType {
+  VISITOR
+  CUSTOMER
+  AGENT
+  SUPERVISOR
+  SYSTEM
+}
+
+enum MessageSenderType {
+  INTEGRATION
+  VISITOR
+  CUSTOMER
+  AGENT
+  SYSTEM
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  SYSTEM_EVENT
+  INTERNAL_NOTE
+}
+
+enum AttachmentStatus {
+  UPLOADING
+  PROCESSING
+  READY
+  REJECTED
+}
+
+enum AttachmentActorType {
+  BUSINESS_USER
+  VISITOR
+}
+
+enum AgentProfileStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum DepartmentStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum AssignmentType {
+  AUTO
+  MANUAL
+  TRANSFER
+  REASSIGNMENT
+}
+
+enum ConversationEventType {
+  CREATED
+  QUEUED
+  ASSIGNED
+  ACCEPTED
+  TRANSFERRED
+  REASSIGNED
+  RESOLVED
+  REOPENED
+  CLOSED
+  AGENT_JOINED
+  AGENT_LEFT
+  TAGS_CHANGED
+  INTERNAL_NOTE_ADDED
+}
+
+enum ConversationEventActorType {
+  INTEGRATION
+  BUSINESS_USER
+  VISITOR
+  SYSTEM
+}
+
+enum ResourceStatus {
+  ACTIVE
+  DISABLED
+}
+
+model Business {
+  id                       String                   @id @default(uuid()) @db.Uuid
+  name                     String                   @db.VarChar(120)
+  slug                     String                   @unique @db.VarChar(80)
+  publicId                 String                   @unique @db.VarChar(64)
+  status                   BusinessStatus           @default(TRIAL)
+  timezone                 String                   @default("UTC") @db.VarChar(100)
+  defaultLocale            String                   @default("en") @db.VarChar(35)
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  memberships              BusinessMembership[]
+  auditLogs                AuditLog[]
+  domains                  BusinessDomain[]
+  widgetSettings           WidgetSettings?
+  visitors                 Visitor[]
+  visitorSessions          VisitorSession[]
+  widgetSessions           WidgetSession[]
+  conversations            Conversation[]
+  messages                 Message[]
+  messageReceipts          MessageReceipt[]
+  agentProfiles            AgentProfile[]
+  departments              Department[]
+  agentDepartments         AgentDepartment[]
+  conversationAssignments  ConversationAssignment[]
+  conversationQueueEntries ConversationQueueEntry[]
+  conversationEvents       ConversationEvent[]
+  tags                     Tag[]
+  conversationTags         ConversationTag[]
+  cannedResponses          CannedResponse[]
+  businessHours            BusinessHour[]
+  attachments              Attachment[]
+  integrationKeys          IntegrationKey[]
+  integrationCustomers     IntegrationCustomer[]
+  integrationRequests      IntegrationRequest[]
+  webhookEndpoints         WebhookEndpoint[]
+
+  @@index([status])
+  @@map("businesses")
+}
+
+model BusinessDomain {
+  id                    String       @id @default(uuid()) @db.Uuid
+  businessId            String       @db.Uuid
+  domain                String       @unique @db.VarChar(253)
+  status                DomainStatus @default(PENDING)
+  verificationTokenHash String       @db.Char(64)
+  verifiedAt            DateTime?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  business              Business     @relation(fields: [businessId], references: [id], onDelete: Restrict)
+
+  @@index([businessId, status])
+  @@map("business_domains")
+}
+
+model WidgetSettings {
+  id                          String         @id @default(uuid()) @db.Uuid
+  businessId                  String         @unique @db.Uuid
+  displayName                 String?        @db.VarChar(120)
+  primaryColor                String         @default("#155f43") @db.Char(7)
+  greeting                    String         @default("How can we help?") @db.VarChar(240)
+  launcherPosition            WidgetPosition @default(BOTTOM_RIGHT)
+  departmentSelectionEnabled  Boolean        @default(false)
+  preferPreviousConsultant    Boolean        @default(true)
+  queueMessage                String         @default("All consultants are busy. You're in the queue and we'll be with you shortly.") @db.VarChar(240)
+  offlineMessage              String         @default("We're currently offline. Leave us a message and we'll respond when we're back.") @db.VarChar(240)
+  resolvedMessage             String         @default("Thanks for chatting with us. This conversation has been resolved.") @db.VarChar(240)
+  reopenWindowMinutes         Int            @default(1440)
+  agentDisconnectGraceSeconds Int            @default(30)
+  enabled                     Boolean        @default(true)
+  createdAt                   DateTime       @default(now())
+  updatedAt                   DateTime       @updatedAt
+  business                    Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("widget_settings")
+}
+
+model BusinessHour {
+  id            String   @id @default(uuid()) @db.Uuid
+  businessId    String   @db.Uuid
+  weekday       Int
+  openingMinute Int
+  closingMinute Int
+  isClosed      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  business      Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, weekday])
+  @@index([businessId, weekday])
+  @@map("business_hours")
+}
+
+model Visitor {
+  id                  String               @id @default(uuid()) @db.Uuid
+  businessId          String               @db.Uuid
+  anonymousIdentifier String               @unique @db.VarChar(64)
+  convertedCustomerId String?              @db.Uuid
+  createdAt           DateTime             @default(now())
+  lastSeenAt          DateTime             @default(now())
+  business            Business             @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  sessions            VisitorSession[]
+  conversations       Conversation[]
+  sentMessages        Message[]            @relation("MessageSenderVisitor")
+  integrationCustomer IntegrationCustomer?
+
+  @@index([businessId, lastSeenAt])
+  @@map("visitors")
+}
+
+model VisitorSession {
+  id             String          @id @default(uuid()) @db.Uuid
+  businessId     String          @db.Uuid
+  visitorId      String          @db.Uuid
+  tokenHash      String          @unique @db.Char(64)
+  firstSeenAt    DateTime        @default(now())
+  lastSeenAt     DateTime        @default(now())
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  userAgent      String?         @db.VarChar(512)
+  business       Business        @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  visitor        Visitor         @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  widgetSessions WidgetSession[]
+
+  @@index([businessId, visitorId])
+  @@index([businessId, expiresAt])
+  @@map("visitor_sessions")
+}
+
+model WidgetSession {
+  id               String         @id @default(uuid()) @db.Uuid
+  businessId       String         @db.Uuid
+  visitorSessionId String         @db.Uuid
+  tokenHash        String         @unique @db.Char(64)
+  origin           String         @db.VarChar(300)
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  lastSeenAt       DateTime       @default(now())
+  createdAt        DateTime       @default(now())
+  business         Business       @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  visitorSession   VisitorSession @relation(fields: [visitorSessionId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, expiresAt])
+  @@index([visitorSessionId, expiresAt])
+  @@map("widget_sessions")
+}
+
+model User {
+  id                      String                   @id @default(uuid()) @db.Uuid
+  email                   String                   @unique @db.VarChar(254)
+  displayName             String                   @db.VarChar(100)
+  passwordHash            String                   @db.VarChar(255)
+  status                  UserStatus               @default(ACTIVE)
+  emailVerifiedAt         DateTime?
+  passwordChangedAt       DateTime?
+  lastLoginAt             DateTime?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  memberships             BusinessMembership[]
+  sessions                Session[]
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  auditLogs               AuditLog[]               @relation("AuditActor")
+  sentMessages            Message[]                @relation("MessageSenderUser")
+  agentProfiles           AgentProfile[]
+  createdCannedResponses  CannedResponse[]
+
+  @@map("users")
+}
+
+model BusinessMembership {
+  id                    String           @id @default(uuid()) @db.Uuid
+  businessId            String           @db.Uuid
+  userId                String           @db.Uuid
+  role                  BusinessRole
+  status                MembershipStatus @default(ACTIVE)
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  business              Business         @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessions              Session[]
+  assignedConversations Conversation[]   @relation("AssignedAgent")
+  agentProfile          AgentProfile?
+
+  @@unique([businessId, userId])
+  @@index([userId, status])
+  @@index([businessId, role, status])
+  @@map("business_memberships")
+}
+
+model AgentProfile {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  businessId         String                   @db.Uuid
+  userId             String                   @db.Uuid
+  membershipId       String                   @unique @db.Uuid
+  maxConcurrentChats Int                      @default(5)
+  routingEnabled     Boolean                  @default(true)
+  status             AgentProfileStatus       @default(ACTIVE)
+  lastAssignedAt     DateTime?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+  business           Business                 @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  user               User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  membership         BusinessMembership       @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  departments        AgentDepartment[]
+  assignments        ConversationAssignment[]
+
+  @@unique([businessId, userId])
+  @@index([businessId, status, routingEnabled])
+  @@map("agent_profiles")
+}
+
+model Department {
+  id              String                   @id @default(uuid()) @db.Uuid
+  publicId        String                   @unique @db.VarChar(64)
+  businessId      String                   @db.Uuid
+  name            String                   @db.VarChar(100)
+  description     String?                  @db.VarChar(500)
+  status          DepartmentStatus         @default(ACTIVE)
+  isDefault       Boolean                  @default(false)
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+  business        Business                 @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  agents          AgentDepartment[]
+  conversations   Conversation[]
+  assignments     ConversationAssignment[]
+  queueEntries    ConversationQueueEntry[]
+  cannedResponses CannedResponse[]
+
+  @@unique([businessId, name])
+  @@index([businessId, status, createdAt])
+  @@map("departments")
+}
+
+model AgentDepartment {
+  id             String       @id @default(uuid()) @db.Uuid
+  businessId     String       @db.Uuid
+  agentProfileId String       @db.Uuid
+  departmentId   String       @db.Uuid
+  createdAt      DateTime     @default(now())
+  business       Business     @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  agentProfile   AgentProfile @relation(fields: [agentProfileId], references: [id], onDelete: Cascade)
+  department     Department   @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentProfileId, departmentId])
+  @@index([businessId, departmentId, agentProfileId])
+  @@map("agent_departments")
+}
+
+model Session {
+  id           String             @id @default(uuid()) @db.Uuid
+  tokenHash    String             @unique @db.Char(64)
+  userId       String             @db.Uuid
+  membershipId String             @db.Uuid
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  lastSeenAt   DateTime           @default(now())
+  ipAddress    String?            @db.VarChar(64)
+  userAgent    String?            @db.VarChar(512)
+  createdAt    DateTime           @default(now())
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  membership   BusinessMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([membershipId, expiresAt])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.Char(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.Char(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("email_verification_tokens")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @db.Uuid
+  actorUserId String?  @db.Uuid
+  action      String   @db.VarChar(120)
+  targetType  String?  @db.VarChar(80)
+  targetId    String?  @db.VarChar(100)
+  requestId   String?  @db.VarChar(100)
+  ipAddress   String?  @db.VarChar(64)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  actor       User?    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, createdAt])
+  @@index([businessId, action, createdAt])
+  @@map("audit_logs")
+}
+
+model Conversation {
+  id                        String                    @id @default(uuid()) @db.Uuid
+  businessId                String                    @db.Uuid
+  visitorId                 String?                   @db.Uuid
+  customerId                String?                   @db.Uuid
+  departmentId              String?                   @db.Uuid
+  assignedAgentMembershipId String?                   @db.Uuid
+  status                    ConversationStatus        @default(NEW)
+  priority                  ConversationPriority      @default(NORMAL)
+  source                    ConversationSource        @default(WEB_WIDGET)
+  subject                   String?                   @db.VarChar(240)
+  nextSequence              BigInt                    @default(0)
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+  assignedAt                DateTime?
+  firstResponseAt           DateTime?
+  resolvedAt                DateTime?
+  reopenedAt                DateTime?
+  agentDisconnectedAt       DateTime?
+  reassignmentDueAt         DateTime?
+  reassignmentAttempts      Int                       @default(0)
+  reassignmentLastError     String?                   @db.VarChar(500)
+  closedAt                  DateTime?
+  lastMessageAt             DateTime?
+  business                  Business                  @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  visitor                   Visitor?                  @relation(fields: [visitorId], references: [id], onDelete: Restrict)
+  assignedAgent             BusinessMembership?       @relation("AssignedAgent", fields: [assignedAgentMembershipId], references: [id], onDelete: SetNull)
+  department                Department?               @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  participants              ConversationParticipant[]
+  messages                  Message[]
+  attachments               Attachment[]
+  assignments               ConversationAssignment[]
+  queueEntry                ConversationQueueEntry?
+  events                    ConversationEvent[]
+  tags                      ConversationTag[]
+
+  @@index([businessId, status, lastMessageAt])
+  @@index([businessId, visitorId, status])
+  @@index([businessId, assignedAgentMembershipId, status])
+  @@index([businessId, departmentId, status])
+  @@index([businessId, reassignmentDueAt, status])
+  @@map("conversations")
+}
+
+model ConversationAssignment {
+  id                     String         @id @default(uuid()) @db.Uuid
+  businessId             String         @db.Uuid
+  conversationId         String         @db.Uuid
+  agentProfileId         String         @db.Uuid
+  departmentId           String?        @db.Uuid
+  assignedByMembershipId String?        @db.Uuid
+  assignmentType         AssignmentType @default(AUTO)
+  assignedAt             DateTime       @default(now())
+  releasedAt             DateTime?
+  reason                 String?        @db.VarChar(240)
+  business               Business       @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  conversation           Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agentProfile           AgentProfile   @relation(fields: [agentProfileId], references: [id], onDelete: Restrict)
+  department             Department?    @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, conversationId, assignedAt])
+  @@index([businessId, agentProfileId, releasedAt])
+  @@map("conversation_assignments")
+}
+
+model ConversationQueueEntry {
+  id             String               @id @default(uuid()) @db.Uuid
+  businessId     String               @db.Uuid
+  conversationId String               @unique @db.Uuid
+  departmentId   String?              @db.Uuid
+  priority       ConversationPriority @default(NORMAL)
+  enqueuedAt     DateTime             @default(now())
+  assignedAt     DateTime?
+  removedAt      DateTime?
+  attempts       Int                  @default(0)
+  lastAttemptAt  DateTime?
+  business       Business             @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  conversation   Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  department     Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, departmentId, assignedAt, removedAt, priority, enqueuedAt])
+  @@map("conversation_queue_entries")
+}
+
+model ConversationEvent {
+  id             String                     @id @default(uuid()) @db.Uuid
+  businessId     String                     @db.Uuid
+  conversationId String                     @db.Uuid
+  type           ConversationEventType
+  actorType      ConversationEventActorType
+  actorId        String?                    @db.Uuid
+  metadata       Json?
+  createdAt      DateTime                   @default(now())
+  business       Business                   @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  conversation   Conversation               @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, conversationId, createdAt])
+  @@index([businessId, type, createdAt])
+  @@map("conversation_events")
+}
+
+model Tag {
+  id            String            @id @default(uuid()) @db.Uuid
+  businessId    String            @db.Uuid
+  name          String            @db.VarChar(80)
+  color         String            @default("#64748b") @db.Char(7)
+  status        ResourceStatus    @default(ACTIVE)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  business      Business          @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  conversations ConversationTag[]
+
+  @@unique([businessId, name])
+  @@index([businessId, status, name])
+  @@map("tags")
+}
+
+model ConversationTag {
+  id             String       @id @default(uuid()) @db.Uuid
+  businessId     String       @db.Uuid
+  conversationId String       @db.Uuid
+  tagId          String       @db.Uuid
+  addedByUserId  String       @db.Uuid
+  createdAt      DateTime     @default(now())
+  business       Business     @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tag            Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, tagId])
+  @@index([businessId, tagId, createdAt])
+  @@map("conversation_tags")
+}
+
+model CannedResponse {
+  id              String         @id @default(uuid()) @db.Uuid
+  businessId      String         @db.Uuid
+  departmentId    String?        @db.Uuid
+  title           String         @db.VarChar(120)
+  content         String         @db.VarChar(4000)
+  shortcut        String?        @db.VarChar(40)
+  status          ResourceStatus @default(ACTIVE)
+  createdByUserId String         @db.Uuid
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  business        Business       @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  department      Department?    @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  createdBy       User           @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([businessId, shortcut])
+  @@index([businessId, status, departmentId, title])
+  @@map("canned_responses")
+}
+
+model ConversationParticipant {
+  id              String          @id @default(uuid()) @db.Uuid
+  businessId      String          @db.Uuid
+  conversationId  String          @db.Uuid
+  participantType ParticipantType
+  participantId   String          @db.Uuid
+  joinedAt        DateTime        @default(now())
+  leftAt          DateTime?
+  conversation    Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, participantType, participantId])
+  @@index([businessId, participantType, participantId, leftAt])
+  @@index([conversationId, joinedAt])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id               String            @id @default(uuid()) @db.Uuid
+  businessId       String            @db.Uuid
+  conversationId   String            @db.Uuid
+  senderType       MessageSenderType
+  integrationKeyId String?           @db.Uuid
+  senderUserId     String?           @db.Uuid
+  senderVisitorId  String?           @db.Uuid
+  senderCustomerId String?           @db.Uuid
+  clientMessageId  String            @db.Uuid
+  sequenceNumber   BigInt
+  messageType      MessageType       @default(TEXT)
+  content          String?           @db.VarChar(4000)
+  createdAt        DateTime          @default(now())
+  editedAt         DateTime?
+  deletedAt        DateTime?
+  business         Business          @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  conversation     Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderUser       User?             @relation("MessageSenderUser", fields: [senderUserId], references: [id], onDelete: SetNull)
+  senderVisitor    Visitor?          @relation("MessageSenderVisitor", fields: [senderVisitorId], references: [id], onDelete: SetNull)
+  receipts         MessageReceipt[]
+  attachments      Attachment[]
+
+  @@unique([conversationId, clientMessageId])
+  @@unique([conversationId, sequenceNumber])
+  @@unique([businessId, senderVisitorId, clientMessageId])
+  @@index([businessId, conversationId, createdAt])
+  @@map("messages")
+}
+
+model Attachment {
+  id               String              @id @default(uuid()) @db.Uuid
+  businessId       String              @db.Uuid
+  conversationId   String              @db.Uuid
+  messageId        String?             @db.Uuid
+  uploadedByType   AttachmentActorType
+  uploadedById     String              @db.Uuid
+  originalFileName String              @db.VarChar(255)
+  storageKey       String              @unique @db.VarChar(180)
+  mimeType         String              @db.VarChar(100)
+  sizeBytes        Int
+  sha256           String              @db.Char(64)
+  status           AttachmentStatus    @default(UPLOADING)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  business         Business            @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  conversation     Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message          Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, conversationId, createdAt])
+  @@index([messageId])
+  @@map("attachments")
+}
+
+model MessageReceipt {
+  id              String          @id @default(uuid()) @db.Uuid
+  businessId      String          @db.Uuid
+  messageId       String          @db.Uuid
+  participantType ParticipantType
+  participantId   String          @db.Uuid
+  deliveredAt     DateTime?
+  readAt          DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  business        Business        @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  message         Message         @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, participantType, participantId])
+  @@index([businessId, participantType, participantId, readAt])
+  @@map("message_receipts")
+}
+
+model IntegrationKey {
+  id         String    @id @default(uuid()) @db.Uuid
+  businessId String    @db.Uuid
+  name       String    @db.VarChar(100)
+  tokenHash  String    @unique @db.VarChar(64)
+  prefix     String    @db.VarChar(20)
+  scopes     String[]
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Restrict)
+
+  @@index([businessId, createdAt])
+  @@map("integration_keys")
+}
+
+model IntegrationCustomer {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  externalId String   @db.VarChar(200)
+  visitorId  String   @unique @db.Uuid
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  visitor    Visitor  @relation(fields: [visitorId], references: [id], onDelete: Restrict)
+
+  @@unique([businessId, externalId])
+  @@map("integration_customers")
+}
+
+model IntegrationRequest {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @db.Uuid
+  key         String   @db.VarChar(128)
+  fingerprint String   @db.VarChar(64)
+  response    Json
+  createdAt   DateTime @default(now())
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
+
+  @@unique([businessId, key])
+  @@index([createdAt])
+  @@map("integration_requests")
+}
+
+model WebhookEndpoint {
+  id              String            @id @default(uuid()) @db.Uuid
+  businessId      String            @db.Uuid
+  url             String            @db.VarChar(2000)
+  secretEncrypted String
+  events          String[]
+  enabled         Boolean           @default(true)
+  createdAt       DateTime          @default(now())
+  business        Business          @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  deliveries      WebhookDelivery[]
+
+  @@index([businessId, enabled])
+  @@map("webhook_endpoints")
+}
+
+// Transactional outbox: database triggers insert deliveries in the originating chat transaction.
+model WebhookDelivery {
+  id            String          @id @default(uuid()) @db.Uuid
+  endpointId    String          @db.Uuid
+  eventId       String          @db.Uuid
+  payload       Json
+  attempts      Int             @default(0)
+  nextAttemptAt DateTime        @default(now())
+  leaseToken    String?         @db.Uuid
+  deliveredAt   DateTime?
+  failedAt      DateTime?
+  lastStatus    Int?
+  createdAt     DateTime        @default(now())
+  endpoint      WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@unique([endpointId, eventId])
+  @@index([deliveredAt, failedAt, nextAttemptAt])
+  @@map("webhook_deliveries")
+}

@@ -1,0 +1,183 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bizchat
+      POSTGRES_USER: bizchat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bizchat -d bizchat']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--requirepass',
+        '${REDIS_PASSWORD:?REDIS_PASSWORD is required}',
+      ]
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a $$REDIS_PASSWORD ping | grep PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    volumes:
+      - redis-data:/data
+
+  minio:
+    image: quay.io/minio/minio:latest
+    restart: unless-stopped
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:9000/minio/health/live || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    restart: 'no'
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing "local/$$S3_BUCKET" &&
+        mc anonymous set none "local/$$S3_BUCKET"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
+      S3_BUCKET: ${S3_BUCKET:-bizchat-attachments}
+
+  clamav:
+    image: clamav/clamav:stable
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'echo PING | timeout 2 nc -w 2 127.0.0.1 3310 | grep -q PONG']
+      interval: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 180s
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      target: migration
+    restart: 'no'
+    environment: &api-environment
+      NODE_ENV: production
+      DATABASE_URL: postgresql://bizchat:${POSTGRES_PASSWORD}@postgres:5432/bizchat?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      WIDGET_TOKEN_SECRET: ${WIDGET_TOKEN_SECRET:?WIDGET_TOKEN_SECRET is required}
+      APP_URL: ${APP_URL:?APP_URL is required}
+      DASHBOARD_URL: ${DASHBOARD_URL:?DASHBOARD_URL is required}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:?TRUSTED_PROXIES is required}
+      SOCKET_REDIS_ADAPTER_ENABLED: 'true'
+      ATTACHMENT_STORAGE_PATH: /data/staging
+      ATTACHMENT_STORAGE_DRIVER: s3
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-bizchat-attachments}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
+      S3_FORCE_PATH_STYLE: 'true'
+      # The bundled MinIO is reachable only over the private service network, so plaintext HTTP is
+      # acceptable there. Set false when pointing at a managed HTTPS S3 endpoint.
+      S3_ALLOW_INSECURE: ${S3_ALLOW_INSECURE:-true}
+      # Bundled MinIO has no KMS; set true when pointing at managed S3 that supports SSE-S3.
+      S3_SERVER_SIDE_ENCRYPTION: ${S3_SERVER_SIDE_ENCRYPTION:-false}
+      S3_PREFIX: ${S3_PREFIX:-attachments}
+      ATTACHMENT_SCANNER: clamav
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: '3310'
+      THROTTLER_FAIL_MODE: ${THROTTLER_FAIL_MODE:-closed}
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST is required}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM is required}
+    command: ['npm', 'run', 'db:migrate:deploy', '-w', '@bizchat/api']
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment: *api-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4000/api/v1/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    ports:
+      - '127.0.0.1:4000:4000'
+    volumes:
+      - staging:/data/staging
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+        NEXT_PUBLIC_WIDGET_URL: ${NEXT_PUBLIC_WIDGET_URL:?NEXT_PUBLIC_WIDGET_URL is required}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:3000:3000'
+
+  widget:
+    build:
+      context: .
+      dockerfile: Dockerfile.widget
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:4173:8080'
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  staging:
