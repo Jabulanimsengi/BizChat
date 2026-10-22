@@ -4,6 +4,15 @@ describe('ConversationReliabilityService', () => {
   const config = {
     get: jest.fn((key: string) => (key === 'RELIABILITY_SWEEP_INTERVAL_MS' ? 5_000 : 1_000)),
   };
+  const leaderRedis = (): { eval: jest.Mock } => ({ eval: jest.fn().mockResolvedValue(1) });
+  const idleRouting = (): Record<
+    'routeConversation' | 'abandonDepartedVisitors' | 'drainBusinessQueue',
+    jest.Mock
+  > => ({
+    routeConversation: jest.fn().mockResolvedValue({ outcome: 'ASSIGNED' }),
+    abandonDepartedVisitors: jest.fn().mockResolvedValue(0),
+    drainBusinessQueue: jest.fn().mockResolvedValue(0),
+  });
 
   it('persists a tenant-configured grace deadline and publishes recovery state', async () => {
     let persistedUpdate: unknown;
@@ -27,6 +36,7 @@ describe('ConversationReliabilityService', () => {
       {} as never,
       {} as never,
       { emit } as never,
+      {} as never,
       config as never,
     );
 
@@ -82,7 +92,7 @@ describe('ConversationReliabilityService', () => {
       conversationParticipant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       conversationQueueEntry: { upsert: jest.fn().mockResolvedValue({}) },
     };
-    const routeConversation = jest.fn().mockResolvedValue({ outcome: 'ASSIGNED' });
+    const routing = idleRouting();
     const recordInTransaction = jest.fn().mockResolvedValue({ event: {}, message: null });
     const prisma = {
       conversation: {
@@ -93,6 +103,7 @@ describe('ConversationReliabilityService', () => {
           .mockResolvedValueOnce([]),
       },
       agentProfile: { findUnique: jest.fn().mockResolvedValue({ id: 'profile-1' }) },
+      conversationQueueEntry: { groupBy: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (operation: (client: typeof transaction) => Promise<unknown>) =>
         operation(transaction),
       ),
@@ -100,9 +111,10 @@ describe('ConversationReliabilityService', () => {
     const service = new ConversationReliabilityService(
       prisma as never,
       { getAgentState: jest.fn().mockResolvedValue('OFFLINE') } as never,
-      { routeConversation } as never,
+      routing as never,
       { recordInTransaction } as never,
       { emit: jest.fn() } as never,
+      leaderRedis() as never,
       config as never,
     );
 
@@ -115,8 +127,93 @@ describe('ConversationReliabilityService', () => {
       transaction,
       expect.objectContaining({ type: 'REASSIGNED', actorType: 'SYSTEM' }),
     );
-    expect(routeConversation).toHaveBeenCalledWith('business-1', 'conversation-1', {
+    expect(routing.routeConversation).toHaveBeenCalledWith('business-1', 'conversation-1', {
       assignmentType: 'REASSIGNMENT',
     });
+  });
+
+  it('leaves the sweep to the instance that holds the lease', async () => {
+    const prisma = { conversation: { findMany: jest.fn() } };
+    const routing = idleRouting();
+    const redis = { eval: jest.fn().mockResolvedValue(0) };
+    const service = new ConversationReliabilityService(
+      prisma as never,
+      {} as never,
+      routing as never,
+      {} as never,
+      { emit: jest.fn() } as never,
+      redis as never,
+      config as never,
+    );
+
+    await service.runSweep();
+
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining('PEXPIRE'),
+      1,
+      'reliability:sweep:leader',
+      expect.any(String),
+      15_000,
+    );
+    expect(prisma.conversation.findMany).not.toHaveBeenCalled();
+    expect(routing.abandonDepartedVisitors).not.toHaveBeenCalled();
+  });
+
+  it('skips the sweep when Redis cannot confirm the lease', async () => {
+    const prisma = { conversation: { findMany: jest.fn() } };
+    const service = new ConversationReliabilityService(
+      prisma as never,
+      {} as never,
+      idleRouting() as never,
+      {} as never,
+      { emit: jest.fn() } as never,
+      { eval: jest.fn().mockRejectedValue(new Error('down')) } as never,
+      config as never,
+    );
+
+    await service.runSweep();
+
+    expect(prisma.conversation.findMany).not.toHaveBeenCalled();
+  });
+
+  it('abandons departed visitors and drains tenant backlogs oldest wait first', async () => {
+    const groupBy = jest
+      .fn()
+      .mockResolvedValue([{ businessId: 'tenant-oldest' }, { businessId: 'tenant-newer' }]);
+    const prisma = {
+      conversation: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ businessId: 'tenant-newer', id: 'stuck-1' }]),
+      },
+      conversationQueueEntry: { groupBy },
+    };
+    const routing = idleRouting();
+    const service = new ConversationReliabilityService(
+      prisma as never,
+      {} as never,
+      routing as never,
+      {} as never,
+      { emit: jest.fn() } as never,
+      leaderRedis() as never,
+      config as never,
+    );
+
+    await service.runSweep();
+
+    expect(routing.abandonDepartedVisitors).toHaveBeenCalledTimes(1);
+    expect(prisma.conversation.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { assignedAgentMembershipId: null, status: 'NEW', reassignmentDueAt: null },
+        orderBy: { createdAt: 'asc' },
+      }),
+    );
+    expect(routing.routeConversation).toHaveBeenCalledWith('tenant-newer', 'stuck-1');
+    expect(groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: { _min: { enqueuedAt: 'asc' } } }),
+    );
+    expect(routing.drainBusinessQueue.mock.calls).toEqual([['tenant-oldest'], ['tenant-newer']]);
   });
 });

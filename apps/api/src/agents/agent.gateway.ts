@@ -75,6 +75,7 @@ interface AgentSocketData {
   auth: AuthContext;
   profileId: string;
   manualState: 'ONLINE' | 'BUSY' | 'AWAY' | 'DO_NOT_DISTURB';
+  lastPresenceState?: AgentPresenceEvent['state'];
 }
 interface AgentDirectServerEvents {
   'agent.connected': (event: AgentConnectedEvent) => void;
@@ -146,6 +147,7 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
         await client.join(this.conversationRoom(auth.business.id, conversationId));
       }
       const presenceEvent = await this.profiles.presenceEvent(profile, state);
+      client.data.lastPresenceState = presenceEvent.state;
       this.publishPresence(auth.business.id, presenceEvent);
       const payload: AgentConnectedEvent = {
         connectedAt: new Date().toISOString(),
@@ -201,8 +203,12 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
       );
       const profile = await this.profiles.getOrCreate(client.data.auth);
       const event = await this.profiles.presenceEvent(profile, state);
+      const previousState = client.data.lastPresenceState;
+      client.data.lastPresenceState = event.state;
       this.publishPresence(client.data.auth.business.id, event);
-      if (event.state === 'ONLINE')
+      // Steady heartbeats never drain; capacity releases and presence changes trigger drains, and
+      // the reliability sweep is the backstop. A heartbeat only drains when it restores availability.
+      if (event.state === 'ONLINE' && previousState !== 'ONLINE')
         void this.routing.drainForAgent(client.data.auth.business.id, client.data.profileId);
       acknowledge({ ok: true, data: { serverTime: new Date().toISOString(), presence: event } });
     } catch (error) {
@@ -236,6 +242,7 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
       );
       const profile = await this.profiles.getOrCreate(client.data.auth);
       const event = await this.profiles.presenceEvent(profile, state);
+      client.data.lastPresenceState = event.state;
       this.publishPresence(client.data.auth.business.id, event);
       if (event.state === 'ONLINE')
         void this.routing.drainForAgent(client.data.auth.business.id, client.data.profileId);

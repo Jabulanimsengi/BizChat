@@ -267,6 +267,11 @@ class BizChatWidgetElement extends HTMLElement {
         this.setComposerNote('Conversation reopened. We are connecting you with a consultant.');
       else if (event.operation === 'TRANSFERRED')
         this.setComposerNote('Your conversation was transferred to the right team.');
+      else if (event.operation === 'ABANDONED') {
+        safeStorageRemove(this.conversationStorageKey());
+        this.conversationId = undefined;
+        this.setComposerNote('Your place in the queue expired. Send a message to start again.');
+      }
     });
     this.socket.on('conversation.recovery', (event: ConversationRecoveryEvent) => {
       if (event.conversationId !== this.conversationId) return;

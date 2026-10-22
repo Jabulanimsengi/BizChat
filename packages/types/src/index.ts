@@ -275,7 +275,7 @@ export interface ConversationEventResponse {
 export interface ConversationOperationEvent {
   conversation: ConversationResponse;
   event: ConversationEventResponse;
-  operation: 'TRANSFERRED' | 'RESOLVED' | 'REOPENED' | 'TAGS_CHANGED';
+  operation: 'TRANSFERRED' | 'RESOLVED' | 'REOPENED' | 'TAGS_CHANGED' | 'ABANDONED';
   previousAssignedAgentMembershipId: string | null;
   assignedAgentMembershipId: string | null;
 }

@@ -198,8 +198,25 @@ Transient routing failures store the next retry deadline, attempt count, and bou
 PostgreSQL with exponential backoff.
 
 A periodic, overlap-safe recovery sweep reconstructs missing queue entries from `QUEUED`
-conversations and retries unassigned `NEW`/`QUEUED` conversations. This makes API restarts and Redis
-key loss recoverable without reconstructing durable state from ephemeral data.
+conversations, closes abandoned queue entries, retries unrouted `NEW` conversations, and drains every
+tenant backlog, longest-waiting tenant first. Only the API instance holding the Redis lease
+`reliability:sweep:leader` runs it; when Redis is unavailable no instance sweeps, because presence is
+unknown and expiring grace periods would otherwise reassign chats from live consultants. This makes
+API restarts and Redis key loss recoverable without reconstructing durable state from ephemeral data.
+
+Queue drains are triggered by events (conversation created, capacity released, consultant connected
+or back online), never by steady heartbeats. Each drain reads the queue ordered by priority then wait
+time, stops trying a department once no consultant in it is eligible, and republishes positions for
+departments where a customer left the queue. A per-tenant Redis lock (`routing:drain:{businessId}:lock`)
+coalesces concurrent triggers across instances: a trigger that finds a drain running sets
+`routing:drain:{businessId}:pending` and the running drain makes another pass. PostgreSQL's
+conditional claims keep drains correct if Redis is unavailable.
+
+A queued web conversation is abandoned when the visitor has sent no message and held no live widget
+session (the widget heartbeat refreshes `widget_sessions.lastSeenAt`) for
+`QUEUE_ABANDON_AFTER_SECONDS` (default 120). It moves to `CLOSED` with a `CLOSED` timeline event whose
+metadata reason is `VISITOR_LEFT_QUEUE`, its queue entry is removed, and the inbox receives an
+`ABANDONED` operation. Abandoned chats never consume consultant capacity.
 
 Redis key patterns used by the realtime layer are deliberately tenant-scoped and TTL-bound:
 

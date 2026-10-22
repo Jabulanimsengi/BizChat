@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
+import { randomUUID } from 'node:crypto';
 import type {
   AssignmentType,
   AgentProfile,
@@ -8,20 +10,27 @@ import type {
   ConversationQueueEntry,
   Message,
   MessageReceipt,
+  Prisma,
 } from '@prisma/client';
 import type { ConversationResponse, ConversationRoutingEvent } from '@bizchat/types';
+import type { Environment } from '../config/environment';
 import {
   CONVERSATION_CREATED_EVENT,
+  CONVERSATION_OPERATION_EVENT,
   MESSAGE_CREATED_EVENT,
   type ConversationCreatedApplicationEvent,
+  type ConversationOperationApplicationEvent,
   type MessageCreatedApplicationEvent,
 } from '../conversations/conversation-events';
 import { serializeConversation, serializeMessage } from '../conversations/conversation-serializer';
 import { ConversationTimelineService } from '../conversations/conversation-timeline.service';
 import { PrismaService } from '../database/prisma.service';
 import { PresenceService } from '../realtime/presence.service';
+import { RedisService } from '../realtime/redis.service';
+import { RELEASE_IF_HOLDER_SCRIPT } from '../realtime/redis-lock';
 import {
   CAPACITY_STATUSES,
+  DrainScopeTracker,
   orderCandidates,
   orderQueue,
   PRIORITY_WEIGHT,
@@ -36,15 +45,42 @@ import {
 
 type CandidateProfile = AgentProfile & { membership: { status: string }; user: { status: string } };
 
+const DRAIN_BATCH_SIZE = 200;
+const DRAIN_LOCK_TTL_MS = 30_000;
+const MAX_DRAIN_PASSES = 5;
+const ABANDON_BATCH_SIZE = 200;
+
+/**
+ * Unassigned widget conversations whose visitor has neither sent a message nor held a live widget
+ * session since the cutoff. The widget heartbeat refreshes `lastSeenAt` in PostgreSQL, so a Redis
+ * outage cannot make a waiting visitor look departed.
+ */
+function departedVisitorWhere(cutoff: Date): Prisma.ConversationWhereInput {
+  return {
+    status: { in: [...ROUTABLE_STATUSES] },
+    assignedAgentMembershipId: null,
+    source: 'WEB_WIDGET',
+    OR: [{ lastMessageAt: { lt: cutoff } }, { lastMessageAt: null, createdAt: { lt: cutoff } }],
+    visitor: {
+      is: { sessions: { none: { widgetSessions: { some: { lastSeenAt: { gte: cutoff } } } } } },
+    },
+  };
+}
+
 @Injectable()
 export class ConversationRoutingService {
   private readonly logger = new Logger(ConversationRoutingService.name);
+  private readonly abandonAfterSeconds: number;
   public constructor(
     private readonly prisma: PrismaService,
     private readonly presence: PresenceService,
     private readonly events: EventEmitter2,
     private readonly timeline: ConversationTimelineService,
-  ) {}
+    private readonly redis: RedisService,
+    config: ConfigService<Environment, true>,
+  ) {
+    this.abandonAfterSeconds = config.get('QUEUE_ABANDON_AFTER_SECONDS', { infer: true });
+  }
 
   @OnEvent(CONVERSATION_CREATED_EVENT, { async: true })
   public async newConversation(event: ConversationCreatedApplicationEvent): Promise<void> {
@@ -132,7 +168,72 @@ export class ConversationRoutingService {
     return this.queue(conversation);
   }
 
+  /**
+   * Drains one tenant's queue, coalescing concurrent triggers across API instances: a trigger that
+   * finds a drain in progress marks the queue dirty and the running drain makes another pass. A
+   * trigger racing the final release can be missed; the reliability sweep drains every backlog within
+   * one interval.
+   */
   public async drainBusinessQueue(businessId: string): Promise<number> {
+    const lockKey = `routing:drain:${businessId}:lock`;
+    const pendingKey = `routing:drain:${businessId}:pending`;
+    let assigned = 0;
+    for (let pass = 0; pass < MAX_DRAIN_PASSES; pass += 1) {
+      const token = randomUUID();
+      try {
+        const locked = await this.redis.set(lockKey, token, 'PX', DRAIN_LOCK_TTL_MS, 'NX');
+        if (locked !== 'OK') {
+          await this.redis.set(pendingKey, '1', 'PX', DRAIN_LOCK_TTL_MS);
+          return assigned;
+        }
+        await this.redis.del(pendingKey);
+      } catch (error) {
+        // Redis only coalesces drains; conditional PostgreSQL claims keep an uncoordinated drain safe.
+        this.logger.warn(
+          `Queue drain lock unavailable for ${businessId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return assigned + (await this.drainOnce(businessId));
+      }
+      try {
+        assigned += await this.drainOnce(businessId);
+      } finally {
+        await this.redis.eval(RELEASE_IF_HOLDER_SCRIPT, 1, lockKey, token).catch(() => undefined);
+      }
+      if ((await this.redis.exists(pendingKey).catch(() => 0)) === 0) return assigned;
+    }
+    return assigned;
+  }
+
+  /** Closes queued conversations whose visitor left before a consultant became available. */
+  public async abandonDepartedVisitors(now = new Date()): Promise<number> {
+    const cutoff = new Date(now.getTime() - this.abandonAfterSeconds * 1_000);
+    const candidates = await this.prisma.conversation.findMany({
+      where: departedVisitorWhere(cutoff),
+      orderBy: { createdAt: 'asc' },
+      take: ABANDON_BATCH_SIZE,
+      select: { id: true, businessId: true },
+    });
+    const moved = new Map<string, Set<string | null>>();
+    let abandoned = 0;
+    for (const candidate of candidates) {
+      const closed = await this.abandon(candidate.businessId, candidate.id, cutoff);
+      if (!closed) continue;
+      abandoned += 1;
+      const departments = moved.get(closed.businessId) ?? new Set<string | null>();
+      departments.add(closed.departmentId);
+      moved.set(closed.businessId, departments);
+    }
+    for (const [businessId, departments] of moved)
+      await this.publishQueuePositions(businessId, departments);
+    return abandoned;
+  }
+
+  public async drainForAgent(businessId: string, agentProfileId: string): Promise<void> {
+    if ((await this.presence.getAgentState(businessId, agentProfileId)) === 'ONLINE')
+      await this.drainBusinessQueue(businessId);
+  }
+
+  private async drainOnce(businessId: string): Promise<number> {
     const entries = await this.prisma.conversationQueueEntry.findMany({
       where: {
         businessId,
@@ -140,19 +241,94 @@ export class ConversationRoutingService {
         removedAt: null,
         conversation: { status: 'QUEUED', assignedAgentMembershipId: null },
       },
-      take: 200,
+      // The priority enum is declared LOW..URGENT, so PostgreSQL sorts it by urgency.
+      orderBy: [{ priority: 'desc' }, { enqueuedAt: 'asc' }, { id: 'asc' }],
+      take: DRAIN_BATCH_SIZE,
     });
+    const scopes = new DrainScopeTracker();
     let assigned = 0;
     for (const entry of orderQueue(entries)) {
+      if (!scopes.shouldAttempt(entry.departmentId)) continue;
       const result = await this.routeConversation(businessId, entry.conversationId);
-      if (result.outcome === 'ASSIGNED') assigned += 1;
+      if (result.outcome === 'ASSIGNED') {
+        assigned += 1;
+        scopes.recordAssigned(entry.departmentId);
+      } else if (result.conversation.status === 'QUEUED') {
+        scopes.recordExhausted(entry.departmentId);
+      }
     }
+    await this.publishQueuePositions(businessId, scopes.changedDepartments());
     return assigned;
   }
 
-  public async drainForAgent(businessId: string, agentProfileId: string): Promise<void> {
-    if ((await this.presence.getAgentState(businessId, agentProfileId)) === 'ONLINE')
-      await this.drainBusinessQueue(businessId);
+  /** Republishes queue positions to every conversation still waiting in the given departments. */
+  private async publishQueuePositions(
+    businessId: string,
+    departmentIds: Set<string | null>,
+  ): Promise<void> {
+    if (departmentIds.size === 0) return;
+    const named = [...departmentIds].filter((id): id is string => id !== null);
+    const waiting = await this.prisma.conversation.findMany({
+      where: {
+        businessId,
+        status: 'QUEUED',
+        assignedAgentMembershipId: null,
+        OR: [
+          ...(named.length > 0 ? [{ departmentId: { in: named } }] : []),
+          ...(departmentIds.has(null) ? [{ departmentId: null }] : []),
+        ],
+      },
+      take: DRAIN_BATCH_SIZE,
+    });
+    for (const conversation of waiting) await this.publish(conversation, 'QUEUED');
+  }
+
+  private async abandon(
+    businessId: string,
+    conversationId: string,
+    cutoff: Date,
+  ): Promise<Conversation | null> {
+    const outcome = await this.prisma.$transaction(async (transaction) => {
+      const closedAt = new Date();
+      // Re-applying the departure filter makes a visitor who returned since the scan keep their place.
+      const closed = await transaction.conversation.updateMany({
+        where: { id: conversationId, businessId, ...departedVisitorWhere(cutoff) },
+        data: { status: 'CLOSED', closedAt, reassignmentDueAt: null },
+      });
+      if (closed.count !== 1) return null;
+      await transaction.conversationQueueEntry.updateMany({
+        where: { conversationId, assignedAt: null, removedAt: null },
+        data: { removedAt: closedAt },
+      });
+      await transaction.conversationParticipant.updateMany({
+        where: { conversationId, participantType: 'VISITOR', leftAt: null },
+        data: { leftAt: closedAt },
+      });
+      const timeline = await this.timeline.recordInTransaction(transaction, {
+        businessId,
+        conversationId,
+        type: 'CLOSED',
+        actorType: 'SYSTEM',
+        metadata: { reason: 'VISITOR_LEFT_QUEUE', abandonAfterSeconds: this.abandonAfterSeconds },
+      });
+      return {
+        conversation: await transaction.conversation.findUniqueOrThrow({
+          where: { id: conversationId },
+        }),
+        event: timeline.event,
+      };
+    });
+    if (!outcome) return null;
+    this.events.emit(CONVERSATION_OPERATION_EVENT, {
+      businessId,
+      visitorId: outcome.conversation.visitorId,
+      conversation: await this.conversationResponse(outcome.conversation, null, null),
+      event: this.timeline.serialize(outcome.event),
+      operation: 'ABANDONED',
+      previousAssignedAgentMembershipId: null,
+      assignedAgentMembershipId: null,
+    } satisfies ConversationOperationApplicationEvent);
+    return outcome.conversation;
   }
 
   private async eligibleCandidates(
@@ -356,9 +532,32 @@ export class ConversationRoutingService {
     conversation: Conversation,
     outcome: 'ASSIGNED' | 'QUEUED',
   ): Promise<ConversationRoutingEvent> {
-    const queue = await this.prisma.conversationQueueEntry.findUnique({
-      where: { conversationId: conversation.id },
-    });
+    const queue =
+      outcome === 'QUEUED'
+        ? await this.prisma.conversationQueueEntry.findUnique({
+            where: { conversationId: conversation.id },
+          })
+        : null;
+    const position = queue ? await this.queuePosition(queue) : null;
+    const response = await this.conversationResponse(
+      conversation,
+      queue?.enqueuedAt ?? null,
+      position,
+    );
+    return {
+      conversation: response,
+      outcome,
+      assignedAgentMembershipId: conversation.assignedAgentMembershipId,
+      queuedAt: response.queuedAt,
+      queuePosition: position,
+    };
+  }
+
+  private async conversationResponse(
+    conversation: Conversation,
+    queuedAt: Date | null,
+    queuePosition: number | null,
+  ): Promise<ConversationResponse> {
     const department = conversation.departmentId
       ? await this.prisma.department.findUnique({
           where: { id: conversation.departmentId },
@@ -370,12 +569,11 @@ export class ConversationRoutingService {
       include: { tag: true },
       orderBy: { createdAt: 'asc' },
     });
-    const position = outcome === 'QUEUED' && queue ? await this.queuePosition(queue) : null;
-    const response: ConversationResponse = {
+    return {
       ...serializeConversation(conversation),
       departmentName: department?.name ?? null,
-      queuedAt: outcome === 'QUEUED' ? (queue?.enqueuedAt.toISOString() ?? null) : null,
-      queuePosition: position,
+      queuedAt: queuedAt?.toISOString() ?? null,
+      queuePosition,
       tags: conversationTags.map(({ tag }) => ({
         id: tag.id,
         name: tag.name,
@@ -384,13 +582,6 @@ export class ConversationRoutingService {
         createdAt: tag.createdAt.toISOString(),
         updatedAt: tag.updatedAt.toISOString(),
       })),
-    };
-    return {
-      conversation: response,
-      outcome,
-      assignedAgentMembershipId: conversation.assignedAgentMembershipId,
-      queuedAt: response.queuedAt,
-      queuePosition: position,
     };
   }
 

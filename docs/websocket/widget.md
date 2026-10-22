@@ -37,6 +37,9 @@ Success is acknowledged only after PostgreSQL commits.
 - Server to client `message.receipt`: committed delivery/read receipt
 - Server to client `typing.changed`: authorized consultant typing with automatic expiry
 - Server to client `business.presence`: aggregated `ONLINE`/`OFFLINE` consultant availability
+- Server to client `conversation.updated`: transfer, resolve, reopen, tag, and `ABANDONED`
+  operations. `ABANDONED` means the visitor's place in the queue expired after they left; the widget
+  forgets the conversation and the next message starts a new one.
 - Server to client `widget.error`: safe authentication/session error
 
 All input is validated. Start, resume, history, send, and receipt operations re-authorize the durable

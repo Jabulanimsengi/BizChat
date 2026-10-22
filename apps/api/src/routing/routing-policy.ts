@@ -33,6 +33,33 @@ export function orderCandidates<T extends RoutingCandidate>(
   });
 }
 
+/**
+ * Tracks queue scopes during one drain pass. Capacity only shrinks within a pass, so a department with
+ * no eligible consultant stays exhausted, and a miss for a department-less conversation (which may go
+ * to any consultant) exhausts every department.
+ */
+export class DrainScopeTracker {
+  private readonly exhausted = new Set<string | null>();
+  private readonly changed = new Set<string | null>();
+
+  public shouldAttempt(departmentId: string | null): boolean {
+    return !this.exhausted.has(null) && !this.exhausted.has(departmentId);
+  }
+
+  public recordAssigned(departmentId: string | null): void {
+    this.changed.add(departmentId);
+  }
+
+  public recordExhausted(departmentId: string | null): void {
+    this.exhausted.add(departmentId);
+  }
+
+  /** Departments whose queue positions moved because a conversation left them. */
+  public changedDepartments(): Set<string | null> {
+    return new Set(this.changed);
+  }
+}
+
 export function orderQueue<
   T extends { priority: keyof typeof PRIORITY_WEIGHT; enqueuedAt: Date; id: string },
 >(entries: T[]): T[] {

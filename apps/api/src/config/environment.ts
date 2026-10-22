@@ -37,6 +37,7 @@ const environmentSchema = z
     TYPING_TTL_SECONDS: z.coerce.number().int().min(3).max(30).default(6),
     RELIABILITY_SWEEP_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(5_000),
     RELIABILITY_RETRY_BASE_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
+    QUEUE_ABANDON_AFTER_SECONDS: z.coerce.number().int().min(30).max(3_600).default(120),
     SOCKET_REDIS_ADAPTER_ENABLED: z
       .enum(['true', 'false'])
       .default('true')

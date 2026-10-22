@@ -223,3 +223,22 @@ production-mode smoke test passed. An initial reconnect run shared its database 
 instance using a different Redis database; the isolated rerun passed after removing that interference.
 Public TLS/browser compatibility, real SMTP delivery, load targets, and backup/restore deployment
 sign-off remain operator checks and are not claimed by these local results.
+
+## Phase A - Routing stabilisation — 2026-10-22
+
+- Queue drains read entries ordered by priority, then wait time, so the oldest urgent customers are
+  never skipped once more than 200 are queued.
+- Steady consultant heartbeats no longer drain the queue. Drains are triggered by events and
+  coalesced per tenant across API instances with a Redis lock; a drain stops trying a department once
+  no consultant in it is eligible and republishes queue positions only where they moved.
+- The reliability sweep runs on one API instance holding a Redis lease. It repairs only inconsistent
+  queue entries, retries unrouted conversations oldest first, and drains tenant backlogs
+  longest-waiting tenant first. With Redis unavailable no instance sweeps.
+- Queued web conversations whose visitor left for `QUEUE_ABANDON_AFTER_SECONDS` (default 120) are
+  closed with a `VISITOR_LEFT_QUEUE` reason, removed from the queue, and reported to the inbox and
+  widget as `ABANDONED`.
+
+Verification: format, lint, and type checks pass in every workspace; 136 API unit tests (coverage
+gate passed, 29.53% statements), 10 dashboard, 5 widget, and 14 validation tests pass. Against the
+Docker test stack, all 16 HTTP integration tests and the end-to-end suite (Phases 3-7 and 9,
+including the two-node Phase 7) pass. Load targets and production deployment were not exercised.

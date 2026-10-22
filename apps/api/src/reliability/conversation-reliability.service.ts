@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { randomUUID } from 'node:crypto';
 import type { Conversation, Message, MessageReceipt } from '@prisma/client';
 import type { Environment } from '../config/environment';
 import {
@@ -11,6 +12,8 @@ import { serializeMessage } from '../conversations/conversation-serializer';
 import { ConversationTimelineService } from '../conversations/conversation-timeline.service';
 import { PrismaService } from '../database/prisma.service';
 import { PresenceService } from '../realtime/presence.service';
+import { RedisService } from '../realtime/redis.service';
+import { ACQUIRE_OR_RENEW_LEASE_SCRIPT, RELEASE_IF_HOLDER_SCRIPT } from '../realtime/redis-lock';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
 import { CAPACITY_STATUSES } from '../routing/routing-policy';
 import {
@@ -19,12 +22,17 @@ import {
 } from './reliability-events';
 
 const RECOVERABLE_STATUSES = [...CAPACITY_STATUSES] as Conversation['status'][];
+const SWEEP_LEASE_KEY = 'reliability:sweep:leader';
+const SWEEP_BATCH_SIZE = 200;
+const BACKLOG_TENANTS_PER_SWEEP = 100;
 
 @Injectable()
 export class ConversationReliabilityService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ConversationReliabilityService.name);
   private readonly sweepIntervalMs: number;
   private readonly retryBaseMs: number;
+  private readonly leaseTtlMs: number;
+  private readonly instanceId = randomUUID();
   private timer?: NodeJS.Timeout;
   private sweeping = false;
 
@@ -34,10 +42,12 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
     private readonly routing: ConversationRoutingService,
     private readonly timeline: ConversationTimelineService,
     private readonly events: EventEmitter2,
+    private readonly redis: RedisService,
     config: ConfigService<Environment, true>,
   ) {
     this.sweepIntervalMs = config.get('RELIABILITY_SWEEP_INTERVAL_MS', { infer: true });
     this.retryBaseMs = config.get('RELIABILITY_RETRY_BASE_MS', { infer: true });
+    this.leaseTtlMs = Math.max(this.sweepIntervalMs * 3, 15_000);
   }
 
   public onModuleInit(): void {
@@ -46,8 +56,11 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
     this.timer.unref();
   }
 
-  public onModuleDestroy(): void {
+  public async onModuleDestroy(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    await this.redis
+      .eval(RELEASE_IF_HOLDER_SCRIPT, 1, SWEEP_LEASE_KEY, this.instanceId)
+      .catch(() => undefined);
   }
 
   public async agentDisconnected(
@@ -145,30 +158,33 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
     return assigned.map(({ id }) => id);
   }
 
+  /**
+   * Runs on the single API instance holding the Redis sweep lease. Without Redis no instance sweeps:
+   * presence is unknown then, and expiring grace periods would reassign chats from live consultants.
+   */
   public async runSweep(): Promise<void> {
     if (this.sweeping) return;
     this.sweeping = true;
     try {
+      if (!(await this.holdSweepLease())) return;
       await this.reconstructQueueState();
       const due = await this.prisma.conversation.findMany({
         where: {
           reassignmentDueAt: { lte: new Date() },
           status: { in: ['NEW', 'QUEUED', ...RECOVERABLE_STATUSES] },
         },
-        take: 200,
+        take: SWEEP_BATCH_SIZE,
         orderBy: { reassignmentDueAt: 'asc' },
       });
       for (const conversation of due) await this.processDueConversation(conversation);
-      const pending = await this.prisma.conversation.findMany({
-        where: {
-          assignedAgentMembershipId: null,
-          status: { in: ['NEW', 'QUEUED'] },
-          reassignmentDueAt: null,
-        },
+      await this.routing.abandonDepartedVisitors();
+      const unrouted = await this.prisma.conversation.findMany({
+        where: { assignedAgentMembershipId: null, status: 'NEW', reassignmentDueAt: null },
         select: { businessId: true, id: true },
-        take: 200,
+        orderBy: { createdAt: 'asc' },
+        take: SWEEP_BATCH_SIZE,
       });
-      for (const conversation of pending) {
+      for (const conversation of unrouted) {
         await this.routing
           .routeConversation(conversation.businessId, conversation.id)
           .catch((error: unknown) => {
@@ -176,6 +192,23 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
               `Durable routing retry failed for ${conversation.id}: ${this.message(error)}`,
             );
           });
+      }
+      // Tenants with the longest-waiting customer drain first, so one busy tenant cannot starve others.
+      const backlog = await this.prisma.conversationQueueEntry.groupBy({
+        by: ['businessId'],
+        where: {
+          assignedAt: null,
+          removedAt: null,
+          conversation: { status: 'QUEUED', assignedAgentMembershipId: null },
+        },
+        _min: { enqueuedAt: true },
+        orderBy: { _min: { enqueuedAt: 'asc' } },
+        take: BACKLOG_TENANTS_PER_SWEEP,
+      });
+      for (const { businessId } of backlog) {
+        await this.routing.drainBusinessQueue(businessId).catch((error: unknown) => {
+          this.logger.warn(`Queue drain failed for ${businessId}: ${this.message(error)}`);
+        });
       }
     } catch (error) {
       this.logger.error(`Reliability sweep failed: ${this.message(error)}`);
@@ -334,9 +367,37 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
     });
   }
 
+  private async holdSweepLease(): Promise<boolean> {
+    try {
+      const held = await this.redis.eval(
+        ACQUIRE_OR_RENEW_LEASE_SCRIPT,
+        1,
+        SWEEP_LEASE_KEY,
+        this.instanceId,
+        this.leaseTtlMs,
+      );
+      return held === 1;
+    } catch (error) {
+      this.logger.warn(`Sweep lease unavailable: ${this.message(error)}`);
+      return false;
+    }
+  }
+
+  /** Repairs only queued conversations whose queue entry is missing or no longer active. */
   private async reconstructQueueState(): Promise<void> {
     const queued = await this.prisma.conversation.findMany({
-      where: { status: 'QUEUED', assignedAgentMembershipId: null },
+      where: {
+        status: 'QUEUED',
+        assignedAgentMembershipId: null,
+        OR: [
+          { queueEntry: { is: null } },
+          {
+            queueEntry: {
+              is: { OR: [{ assignedAt: { not: null } }, { removedAt: { not: null } }] },
+            },
+          },
+        ],
+      },
       select: { id: true, businessId: true, departmentId: true, priority: true },
       take: 500,
     });

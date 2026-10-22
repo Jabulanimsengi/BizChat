@@ -1,5 +1,6 @@
 import {
   CAPACITY_STATUSES,
+  DrainScopeTracker,
   orderCandidates,
   orderQueue,
   type RoutingCandidate,
@@ -65,5 +66,28 @@ describe('routing policy', () => {
       },
     ];
     expect(orderQueue(queue).map(({ id }) => id)).toEqual(['urgent-old', 'urgent-new', 'normal']);
+  });
+
+  it('skips a department once it has no eligible consultant in the drain pass', () => {
+    const scopes = new DrainScopeTracker();
+    scopes.recordExhausted('sales');
+    expect(scopes.shouldAttempt('sales')).toBe(false);
+    expect(scopes.shouldAttempt('support')).toBe(true);
+    expect(scopes.shouldAttempt(null)).toBe(true);
+  });
+
+  it('treats a department-less miss as exhausting every department', () => {
+    const scopes = new DrainScopeTracker();
+    scopes.recordExhausted(null);
+    expect(scopes.shouldAttempt(null)).toBe(false);
+    expect(scopes.shouldAttempt('sales')).toBe(false);
+  });
+
+  it('reports only the departments whose queue positions moved', () => {
+    const scopes = new DrainScopeTracker();
+    scopes.recordAssigned('sales');
+    scopes.recordAssigned(null);
+    scopes.recordExhausted('support');
+    expect([...scopes.changedDepartments()]).toEqual(['sales', null]);
   });
 });
