@@ -213,7 +213,11 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
         where: {
           assignedAt: null,
           removedAt: null,
-          conversation: { status: 'QUEUED', assignedAgentMembershipId: null },
+          conversation: {
+            status: 'QUEUED',
+            assignedAgentMembershipId: null,
+            intakeStatus: { in: ['NOT_REQUIRED', 'COMPLETE'] },
+          },
         },
         _min: { enqueuedAt: true },
         orderBy: { _min: { enqueuedAt: 'asc' } },

@@ -108,8 +108,22 @@ export class TopicService {
 
   private async validateReferences(
     businessId: string,
-    input: { departmentId?: string | null; requiredSkillId?: string | null },
+    input: {
+      departmentId?: string | null;
+      requiredSkillId?: string | null;
+      intakeFormId?: string | null;
+    },
   ): Promise<void> {
+    if (input.intakeFormId) {
+      const form = await this.prisma.intakeForm.count({
+        where: { id: input.intakeFormId, businessId, status: 'ACTIVE' },
+      });
+      if (!form)
+        throw new NotFoundException({
+          code: 'INTAKE_FORM_NOT_FOUND',
+          message: 'The selected form does not exist',
+        });
+    }
     if (input.departmentId) {
       const department = await this.prisma.department.count({
         where: { id: input.departmentId, businessId, status: 'ACTIVE' },
@@ -170,6 +184,7 @@ function serializeTopic(topic: Topic): TopicResponse {
     isDefault: topic.isDefault,
     status: topic.status,
     sortOrder: topic.sortOrder,
+    intakeFormId: topic.intakeFormId,
     createdAt: topic.createdAt.toISOString(),
     updatedAt: topic.updatedAt.toISOString(),
   };

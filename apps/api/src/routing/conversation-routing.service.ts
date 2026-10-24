@@ -12,7 +12,7 @@ import type {
   MessageReceipt,
   Prisma,
 } from '@prisma/client';
-import type { ConversationResponse, ConversationRoutingEvent } from '@bizchat/types';
+import type { ConversationResponse, ConversationRoutingEvent, IntakeAnswer } from '@bizchat/types';
 import type { Environment } from '../config/environment';
 import {
   CONVERSATION_CREATED_EVENT,
@@ -260,7 +260,7 @@ export class ConversationRoutingService {
       !conversation.assignedAgentMembershipId
     )
       throw new Error(`Conversation ${conversation.id} has no pending offer`);
-    const [offer, first] = await Promise.all([
+    const [offer, first, intake] = await Promise.all([
       this.prisma.conversationOffer.findUniqueOrThrow({
         where: { id: conversation.currentOfferId },
         select: { offeredAt: true },
@@ -274,6 +274,11 @@ export class ConversationRoutingService {
         orderBy: { sequenceNumber: 'asc' },
         select: { content: true },
       }),
+      // Pre-chat answers help the consultant decide; the intake module owns writing them.
+      this.prisma.conversationIntake.findUnique({
+        where: { conversationId: conversation.id },
+        include: { form: { select: { name: true } } },
+      }),
     ]);
     return {
       businessId: conversation.businessId,
@@ -281,6 +286,15 @@ export class ConversationRoutingService {
       offerId: conversation.currentOfferId,
       conversation: response ?? (await this.conversationResponse(conversation, null, null)),
       firstMessage: first?.content ?? null,
+      intake: intake
+        ? {
+            formName: intake.form?.name ?? null,
+            formVersion: intake.formVersion,
+            answers: intake.answers as unknown as IntakeAnswer[],
+            consentAt: intake.consentAt?.toISOString() ?? null,
+            submittedAt: intake.submittedAt.toISOString(),
+          }
+        : null,
       offeredAt: offer.offeredAt.toISOString(),
       expiresAt: conversation.offerExpiresAt.toISOString(),
     };
@@ -411,7 +425,11 @@ export class ConversationRoutingService {
         businessId,
         assignedAt: null,
         removedAt: null,
-        conversation: { status: 'QUEUED', assignedAgentMembershipId: null },
+        conversation: {
+          status: 'QUEUED',
+          assignedAgentMembershipId: null,
+          intakeStatus: { in: ['NOT_REQUIRED', 'COMPLETE'] },
+        },
       },
       // The priority enum is declared LOW..URGENT, so PostgreSQL sorts it by urgency.
       orderBy: [{ priority: 'desc' }, { enqueuedAt: 'asc' }, { id: 'asc' }],

@@ -290,6 +290,7 @@ describe('ConversationOfferService', () => {
         offerId: 'offer-1',
         conversation: { id: 'conversation-1' } as never,
         firstMessage: null,
+        intake: null,
         offeredAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 30_000).toISOString(),
       });

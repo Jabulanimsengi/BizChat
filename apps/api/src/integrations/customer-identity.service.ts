@@ -43,11 +43,21 @@ export class CustomerIdentityService {
 
   public async issue(
     principal: IntegrationPrincipal,
-    externalId: string,
+    input: { externalId: string; name?: string; email?: string },
   ): Promise<{ identityToken: string; expiresAt: string }> {
-    const visitorId = await this.prisma.$transaction((tx) =>
-      this.customer(tx, principal.businessId, externalId),
-    );
+    const visitorId = await this.prisma.$transaction(async (tx) => {
+      const id = await this.customer(tx, principal.businessId, input.externalId);
+      // The latest claims win; omitted claims leave stored values unchanged.
+      if (input.name !== undefined || input.email !== undefined)
+        await tx.integrationCustomer.update({
+          where: { visitorId: id },
+          data: {
+            ...(input.name !== undefined ? { displayName: input.name } : {}),
+            ...(input.email !== undefined ? { email: input.email } : {}),
+          },
+        });
+      return id;
+    });
     const expiresAt = Date.now() + 300_000;
     const payload = Buffer.from(
       JSON.stringify({

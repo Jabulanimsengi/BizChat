@@ -1,10 +1,13 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { ClassificationMethod, Conversation, Prisma } from '@prisma/client';
-import type { ConversationRoutingEvent, IntakePrompt } from '@bizchat/types';
-import type { IntakeSubmitInput } from '@bizchat/validation';
+import type { IntakePrompt, IntakeSubmitResult } from '@bizchat/types';
+import type { IntakeFormSubmitInput, IntakeSubmitInput } from '@bizchat/validation';
 import { ConversationTimelineService } from '../conversations/conversation-timeline.service';
 import { PrismaService } from '../database/prisma.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
+import { INTAKE_REQUIRED_EVENT, type IntakeRequiredApplicationEvent } from './intake-events';
+import { IntakeFormService, type FormRequirement } from './intake-form.service';
 import {
   classificationRecord,
   TopicCatalogService,
@@ -22,9 +25,9 @@ interface VisitorIdentity {
 }
 
 /**
- * Topic intake after the first message: the visitor's own choice, a later change of topic while the
- * chat still waits for a consultant, and the fallback to the default topic when a prompt goes
- * unanswered.
+ * Intake after the first message: the visitor's topic choice, a later change of topic while the chat
+ * still waits for a consultant, the pre-chat form, and the fallback to the default topic when a
+ * topic prompt goes unanswered.
  */
 @Injectable()
 export class IntakeService {
@@ -33,11 +36,13 @@ export class IntakeService {
   public constructor(
     private readonly prisma: PrismaService,
     private readonly catalog: TopicCatalogService,
+    private readonly forms: IntakeFormService,
     private readonly routing: ConversationRoutingService,
     private readonly timeline: ConversationTimelineService,
+    private readonly events: EventEmitter2,
   ) {}
 
-  /** The prompt shown with a new conversation, or undefined when nothing needs the visitor. */
+  /** The topic prompt shown with a new conversation, or undefined when nothing needs the visitor. */
   public prompt(decision: IntakeDecision | null): IntakePrompt | undefined {
     if (!decision || decision.decision === 'ROUTE' || decision.method !== 'KEYWORD')
       return undefined;
@@ -50,75 +55,170 @@ export class IntakeService {
     };
   }
 
-  /** Re-shows an unanswered topic prompt when the visitor resumes the conversation. */
+  /** Re-shows an unanswered topic prompt or pending form when the visitor resumes. */
   public async pendingPrompt(conversation: Conversation): Promise<IntakePrompt | undefined> {
-    if (conversation.intakeStatus !== 'AWAITING_TOPIC') return undefined;
-    const topics = (await this.catalog.quickReplies(conversation.businessId)).slice(0, 3);
+    if (conversation.intakeStatus === 'AWAITING_TOPIC') {
+      const topics = (await this.catalog.quickReplies(conversation.businessId)).slice(0, 3);
+      return {
+        step: 'TOPIC',
+        mode: 'ASK',
+        topics,
+        selectedTopic: null,
+        expiresAt: conversation.intakeExpiresAt?.toISOString() ?? null,
+      };
+    }
+    if (conversation.intakeStatus !== 'AWAITING_FORM') return undefined;
+    const requirement = await this.forms.requirement(
+      conversation.businessId,
+      conversation.topicId,
+      conversation.visitorId,
+    );
+    return requirement ? this.formPrompt(requirement) : undefined;
+  }
+
+  public formPrompt(requirement: FormRequirement): IntakePrompt {
     return {
-      step: 'TOPIC',
+      step: 'FORM',
       mode: 'ASK',
-      topics,
+      topics: [],
       selectedTopic: null,
-      expiresAt: conversation.intakeExpiresAt?.toISOString() ?? null,
+      expiresAt: null,
+      form: this.forms.widgetForm(requirement.form, requirement.prefill),
     };
   }
 
   /**
    * Applies the visitor's choice (`null` = "Something else", the default topic). Allowed while the
-   * prompt is open, or as a change while the conversation still waits unassigned.
+   * prompt is open, or as a change while the conversation still waits unassigned. A topic with a
+   * pre-chat form moves to the form step instead of routing.
    */
   public async submit(
     identity: VisitorIdentity,
     input: IntakeSubmitInput,
-  ): Promise<ConversationRoutingEvent> {
-    const conversation = await this.prisma.conversation.findFirst({
-      where: {
-        id: input.conversationId,
-        businessId: identity.businessId,
-        visitorId: identity.visitorId,
-      },
-      select: { id: true },
-    });
-    if (!conversation)
-      throw new NotFoundException({
-        code: 'CONVERSATION_NOT_FOUND',
-        message: 'Conversation not found',
-      });
+  ): Promise<IntakeSubmitResult> {
+    await this.owned(identity, input.conversationId);
     const topic = await this.catalog.findActive(identity.businessId, input.topicPublicId);
-    const applied = await this.apply(identity.businessId, input.conversationId, topic, {
-      method: 'VISITOR_CHOICE',
-      actorType: 'VISITOR',
-      actorId: identity.visitorId,
-      onlyWhileAwaiting: false,
-    });
+    const requirement = await this.requirementFor(
+      identity.businessId,
+      input.conversationId,
+      topic,
+      identity.visitorId,
+    );
+    const applied = await this.apply(
+      identity.businessId,
+      input.conversationId,
+      topic,
+      requirement,
+      {
+        method: 'VISITOR_CHOICE',
+        actorType: 'VISITOR',
+        actorId: identity.visitorId,
+        onlyWhileAwaiting: false,
+      },
+    );
     if (!applied)
       throw new ConflictException({
         code: 'TOPIC_LOCKED',
         message: 'A consultant is already handling this conversation',
       });
-    return this.routing.routeConversation(identity.businessId, input.conversationId);
+    if (requirement && !requirement.autoAnswers)
+      return { routed: null, intake: this.formPrompt(requirement) };
+    return {
+      routed: await this.routing.routeConversation(identity.businessId, input.conversationId),
+      intake: null,
+    };
   }
 
-  /** Reliability-sweep step: unanswered prompts take the default topic and route. */
+  /** Stores the pre-chat form answers and routes the conversation. */
+  public async submitForm(
+    identity: VisitorIdentity,
+    input: IntakeFormSubmitInput,
+  ): Promise<IntakeSubmitResult> {
+    const conversation = await this.owned(identity, input.conversationId);
+    if (conversation.intakeStatus !== 'AWAITING_FORM')
+      throw new ConflictException({
+        code: 'INTAKE_NOT_PENDING',
+        message: 'This conversation is not waiting for a form',
+      });
+    const requirement = await this.forms.requirement(
+      identity.businessId,
+      conversation.topicId,
+      identity.visitorId,
+    );
+    const answers = requirement
+      ? this.forms.validate(requirement.form, input, requirement.prefill)
+      : null;
+    const completed = await this.prisma.$transaction(async (transaction) => {
+      const changed = await transaction.conversation.updateMany({
+        where: {
+          id: conversation.id,
+          businessId: identity.businessId,
+          intakeStatus: 'AWAITING_FORM',
+        },
+        data: { intakeStatus: 'COMPLETE' },
+      });
+      if (changed.count !== 1) return false;
+      // The form may have been removed since the prompt; the conversation then simply routes.
+      if (requirement && answers)
+        await this.forms.record(
+          transaction,
+          identity.businessId,
+          conversation.id,
+          requirement.form,
+          answers,
+          input.consent ?? false,
+        );
+      return true;
+    });
+    if (!completed)
+      throw new ConflictException({
+        code: 'INTAKE_NOT_PENDING',
+        message: 'This conversation is not waiting for a form',
+      });
+    return {
+      routed: await this.routing.routeConversation(identity.businessId, conversation.id),
+      intake: null,
+    };
+  }
+
+  /** Reliability-sweep step: unanswered topic prompts take the default topic and continue. */
   public async expirePrompts(now = new Date()): Promise<number> {
     const due = await this.prisma.conversation.findMany({
       where: { intakeStatus: 'AWAITING_TOPIC', intakeExpiresAt: { lte: now } },
       orderBy: { intakeExpiresAt: 'asc' },
       take: EXPIRY_BATCH_SIZE,
-      select: { id: true, businessId: true },
+      select: { id: true, businessId: true, visitorId: true },
     });
     let expired = 0;
     for (const conversation of due) {
       try {
         const topic = await this.catalog.findActive(conversation.businessId, null);
-        const applied = await this.apply(conversation.businessId, conversation.id, topic, {
-          method: 'TIMEOUT',
-          actorType: 'SYSTEM',
-          onlyWhileAwaiting: true,
-        });
+        const requirement = await this.requirementFor(
+          conversation.businessId,
+          conversation.id,
+          topic,
+          conversation.visitorId,
+        );
+        const applied = await this.apply(
+          conversation.businessId,
+          conversation.id,
+          topic,
+          requirement,
+          {
+            method: 'TIMEOUT',
+            actorType: 'SYSTEM',
+            onlyWhileAwaiting: true,
+          },
+        );
         if (!applied) continue;
         expired += 1;
-        await this.routing.routeConversation(conversation.businessId, conversation.id);
+        if (requirement && !requirement.autoAnswers)
+          this.events.emit(INTAKE_REQUIRED_EVENT, {
+            businessId: conversation.businessId,
+            conversationId: conversation.id,
+            prompt: this.formPrompt(requirement),
+          } satisfies IntakeRequiredApplicationEvent);
+        else await this.routing.routeConversation(conversation.businessId, conversation.id);
       } catch (error) {
         this.logger.warn(
           `Topic prompt fallback failed for ${conversation.id}: ${error instanceof Error ? error.message : String(error)}`,
@@ -128,10 +228,34 @@ export class IntakeService {
     return expired;
   }
 
+  private async owned(identity: VisitorIdentity, conversationId: string): Promise<Conversation> {
+    const conversation = await this.prisma.conversation.findFirst({
+      where: { id: conversationId, businessId: identity.businessId, visitorId: identity.visitorId },
+    });
+    if (!conversation)
+      throw new NotFoundException({
+        code: 'CONVERSATION_NOT_FOUND',
+        message: 'Conversation not found',
+      });
+    return conversation;
+  }
+
+  /** A topic's form, unless the visitor already submitted one for this conversation. */
+  private async requirementFor(
+    businessId: string,
+    conversationId: string,
+    topic: CatalogTopic | null,
+    visitorId: string | null,
+  ): Promise<FormRequirement | null> {
+    const submitted = await this.prisma.conversationIntake.count({ where: { conversationId } });
+    return submitted ? null : this.forms.requirement(businessId, topic?.id ?? null, visitorId);
+  }
+
   private async apply(
     businessId: string,
     conversationId: string,
     topic: CatalogTopic | null,
+    requirement: FormRequirement | null,
     options: {
       method: ClassificationMethod;
       actorType: 'VISITOR' | 'SYSTEM';
@@ -141,6 +265,7 @@ export class IntakeService {
   ): Promise<boolean> {
     const routing = topicRouting(topic);
     const departmentId = routing.departmentId ?? (await this.defaultDepartmentId(businessId));
+    const awaitingForm = Boolean(requirement && !requirement.autoAnswers);
     return this.prisma.$transaction(async (transaction) => {
       const awaiting: Prisma.ConversationWhereInput = { intakeStatus: 'AWAITING_TOPIC' };
       // A change of topic is fine until a consultant is offered or assigned the chat.
@@ -161,11 +286,21 @@ export class IntakeService {
           priority: routing.priority,
           requiredSkillId: routing.requiredSkillId,
           requiredSkillMinProficiency: routing.requiredSkillMinProficiency,
-          intakeStatus: 'COMPLETE',
+          intakeStatus: awaitingForm ? 'AWAITING_FORM' : 'COMPLETE',
           intakeExpiresAt: null,
         },
       });
       if (changed.count !== 1) return false;
+      // Identity claims answered the whole form, so it is stored without asking.
+      if (requirement?.autoAnswers)
+        await this.forms.record(
+          transaction,
+          businessId,
+          conversationId,
+          requirement.form,
+          requirement.autoAnswers,
+          false,
+        );
       // A conversation already queued moves to the new topic's queue, keeping its wait time.
       await transaction.conversationQueueEntry.updateMany({
         where: { conversationId, assignedAt: null, removedAt: null },

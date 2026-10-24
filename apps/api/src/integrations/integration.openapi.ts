@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { customerSchema, startSchema, sendSchema, resolveSchema } from './integration.contracts';
+import { identifySchema, startSchema, sendSchema, resolveSchema } from './integration.contracts';
 
 // Keep request documentation generated from the same contracts used by validation.
 function schema(value: z.ZodTypeAny): object {
@@ -12,6 +12,10 @@ function schema(value: z.ZodTypeAny): object {
     }
     return result;
   }
+  if (value instanceof z.ZodBoolean) return { type: 'boolean' };
+  // Pre-chat answers: string values keyed by the form's field keys.
+  if (value instanceof z.ZodRecord)
+    return { type: 'object', additionalProperties: schema(value.valueSchema as z.ZodTypeAny) };
   if (value instanceof z.ZodObject) {
     const shape = value.shape as Record<string, z.ZodTypeAny>;
     return {
@@ -178,7 +182,7 @@ export const integrationOpenApi = {
       IntegrationKey: { type: 'http', scheme: 'bearer', bearerFormat: 'bzc_<secret>' },
     },
     schemas: {
-      Customer: schema(customerSchema),
+      Customer: schema(identifySchema),
       Start: schema(startSchema),
       Send: schema(sendSchema),
       Resolve: schema(resolveSchema),

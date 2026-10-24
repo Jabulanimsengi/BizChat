@@ -18,6 +18,7 @@ import {
 } from '../conversations/conversation-events';
 import { CONVERSATION_CAPACITY_RELEASED_EVENT } from '../routing/routing-events';
 import { classificationRecord, TopicCatalogService } from '../intake/topic-catalog.service';
+import { IntakeFormService } from '../intake/intake-form.service';
 import { CustomerIdentityService } from './customer-identity.service';
 import {
   idempotencySchema,
@@ -58,6 +59,7 @@ export class IntegrationService {
     private readonly customers: CustomerIdentityService,
     private readonly events: EventEmitter2,
     private readonly topics: TopicCatalogService,
+    private readonly forms: IntakeFormService,
   ) {}
 
   public async list(principal: IntegrationPrincipal, query: PageInput): Promise<object> {
@@ -76,7 +78,11 @@ export class IntegrationService {
   }
 
   public async get(principal: IntegrationPrincipal, id: string): Promise<object> {
-    return publicConversation(await this.find(this.prisma, principal.businessId, id));
+    const conversation = publicConversation(await this.find(this.prisma, principal.businessId, id));
+    // Pre-chat answers are personal information and need the separate intake:read scope.
+    return principal.scopes.includes('intake:read')
+      ? { ...conversation, intake: await this.forms.forConversation(id) }
+      : conversation;
   }
 
   public async history(
@@ -184,6 +190,21 @@ export class IntegrationService {
         await tx.conversationClassification.create({
           data: classificationRecord(principal.businessId, conversation.id, intake),
         });
+      // Answers are optional over the API (no visitor to ask), but must be valid when sent.
+      if (input.intake) {
+        const form =
+          (await this.forms.beforeChatForm(principal.businessId)) ??
+          (await this.forms.afterTopicForm(principal.businessId, intake?.routing.topicId ?? null));
+        if (form)
+          await this.forms.record(
+            tx,
+            principal.businessId,
+            conversation.id,
+            form,
+            this.forms.validate(form, input.intake, await this.forms.prefill(form, visitorId)),
+            input.intake.consent ?? false,
+          );
+      }
       const result = await this.messages.createInTransaction(tx, {
         businessId: principal.businessId,
         conversationId: conversation.id,

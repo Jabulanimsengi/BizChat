@@ -22,19 +22,20 @@ Create a key in **Dashboard → Integrations**, selecting only the permissions y
 Base URL: `https://YOUR_API_HOST/api/v1/integrations`.
 OpenAPI: `https://YOUR_API_HOST/api/v1/integrations/openapi.json`.
 
-| Operation                        | Scope               |
-| -------------------------------- | ------------------- |
-| GET /conversations               | conversations:read  |
-| GET /conversations/:id           | conversations:read  |
-| GET /conversations/:id/messages  | messages:read       |
-| POST /conversations              | conversations:write |
-| POST /conversations/:id/messages | messages:write      |
-| POST /conversations/:id/resolve  | conversations:write |
-| POST /customers/identify         | customers:identify  |
+| Operation                                  | Scope               |
+| ------------------------------------------ | ------------------- |
+| GET /conversations                         | conversations:read  |
+| GET /conversations/:id                     | conversations:read  |
+| GET /conversations/:id/messages            | messages:read       |
+| POST /conversations                        | conversations:write |
+| POST /conversations/:id/messages           | messages:write      |
+| POST /conversations/:id/resolve            | conversations:write |
+| POST /customers/identify                   | customers:identify  |
+| Pre-chat answers on GET /conversations/:id | intake:read         |
 
 All machine requests use `Authorization: Bearer bzc_...`; dashboard cookies are not accepted. Do not send business IDs: tenant context comes from the credential. Request bodies reject unknown properties. Message history excludes internal notes and deleted messages. This release returns public message content/metadata; attachment download remains a separate authorized widget/dashboard capability.
 
-Conversation creation accepts `externalId`, `content`, optional `subject`, optional `departmentPublicId`, and optional `topicPublicId`. Without a department or topic, the subject and first message are matched against the tenant's topics; an uncertain match uses the default topic, because nobody can answer a prompt over the API. It creates a conversation and an inbound visitor message for that tenant's external customer identity, then uses existing routing/recovery. A different idempotency key deliberately creates a new conversation even for the same customer. Outbound message writes are attributed to `INTEGRATION` and record the key ID; they do not impersonate an agent, change an assignment, or count as a human first response. Resolve accepts `{}` or `{ "reason": "..." }`, releases assignment/queue capacity, and notifies connected clients. Resolved/closed conversations reject outbound writes.
+Conversation creation accepts `externalId`, `content`, optional `subject`, optional `departmentPublicId`, optional `topicPublicId`, and optional `intake: { answers, consent }` for the tenant's pre-chat form (validated against the form; omit it when you have no answers). Reading answers back requires a key with the `intake:read` scope, because they are personal information. Without a department or topic, the subject and first message are matched against the tenant's topics; an uncertain match uses the default topic, because nobody can answer a prompt over the API. It creates a conversation and an inbound visitor message for that tenant's external customer identity, then uses existing routing/recovery. A different idempotency key deliberately creates a new conversation even for the same customer. Outbound message writes are attributed to `INTEGRATION` and record the key ID; they do not impersonate an agent, change an assignment, or count as a human first response. Resolve accepts `{}` or `{ "reason": "..." }`, releases assignment/queue capacity, and notifies connected clients. Resolved/closed conversations reject outbound writes.
 
 ### Retries and limits
 
@@ -88,7 +89,7 @@ curl_close($ch);
 
 ## Signed customer identity
 
-Your authenticated website backend calls `POST /customers/identify` with `{ "externalId": "customer-42" }`. Derive this ID from your authenticated session, never an unverified browser parameter. Return the resulting `identityToken` and `expiresAt` to that customer only, with `Cache-Control: no-store`. In the browser call `window.BizChat.identify(identityToken)`. BizChat verifies the signature, expiry, key validity, and tenant before selecting that customer's visitor identity and latest conversation. No API key is sent to the browser. External IDs are unique per tenant.
+Your authenticated website backend calls `POST /customers/identify` with `{ "externalId": "customer-42" }`, optionally adding `name` and `email` claims; pre-chat form fields set to fill from those claims are then completed for that customer. Derive this ID from your authenticated session, never an unverified browser parameter. Return the resulting `identityToken` and `expiresAt` to that customer only, with `Cache-Control: no-store`. In the browser call `window.BizChat.identify(identityToken)`. BizChat verifies the signature, expiry, key validity, and tenant before selecting that customer's visitor identity and latest conversation. No API key is sent to the browser. External IDs are unique per tenant.
 
 Proofs and their widget sessions last at most five minutes. Refresh through your authenticated backend and call identify again before expiry (for example every four minutes); handle `bizchat:error` if refresh fails. The widget keeps identified credentials in memory and recreates its UI when identity changes. Call `window.BizChat.logout()` as part of website logout to clear local chat state and return to an anonymous visitor. Already-issued credentials expire within five minutes; rotation stops new proof use but does not cancel an already-authenticated socket immediately. Avoid issuing proofs unless your site can enforce this logout/refresh contract.
 

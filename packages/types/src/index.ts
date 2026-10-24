@@ -104,6 +104,8 @@ export interface RoutingSettingsResponse {
   /** Below this the visitor is asked to choose a topic; in between they may change it. */
   confirmThreshold: number;
   topicPromptTimeoutSeconds: number;
+  intakeFormTiming: 'AFTER_TOPIC' | 'BEFORE_CHAT';
+  defaultIntakeFormId: string | null;
 }
 
 export type IntakeStatus = 'NOT_REQUIRED' | 'AWAITING_TOPIC' | 'AWAITING_FORM' | 'COMPLETE';
@@ -131,6 +133,7 @@ export interface TopicResponse {
   isDefault: boolean;
   status: 'ACTIVE' | 'DISABLED';
   sortOrder: number;
+  intakeFormId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -153,11 +156,71 @@ export interface WidgetTopic {
  * change the one chosen for them (`CONFIRM`, already routing).
  */
 export interface IntakePrompt {
-  step: 'TOPIC';
+  /** TOPIC: choose a topic. FORM: complete the pre-chat form; routing waits. */
+  step: 'TOPIC' | 'FORM';
   mode: 'ASK' | 'CONFIRM';
   topics: WidgetTopic[];
   selectedTopic: WidgetTopic | null;
   expiresAt: string | null;
+  form?: WidgetIntakeForm;
+}
+
+export type IntakeFieldType = 'TEXT' | 'EMAIL' | 'PHONE' | 'SELECT' | 'REFERENCE';
+export type IntakePrefillClaim = 'name' | 'email';
+
+/** A pre-chat form field as configured by the business. */
+export interface IntakeFormField {
+  /** Stable answer key, e.g. `registration_number`. */
+  key: string;
+  label: string;
+  type: IntakeFieldType;
+  required: boolean;
+  maxLength?: number;
+  /** SELECT choices. */
+  options?: string[];
+  /** REFERENCE format: `#` digit, `A` letter, `*` letter or digit, anything else literal. */
+  mask?: string;
+  /** Filled from a signed customer identity claim and skipped when present. */
+  prefillFrom?: IntakePrefillClaim;
+}
+
+export interface IntakeFormResponse {
+  id: string;
+  name: string;
+  version: number;
+  fields: IntakeFormField[];
+  consentText: string | null;
+  status: 'ACTIVE' | 'DISABLED';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A form as the widget shows it; prefilled fields carry their value. */
+export interface WidgetIntakeForm {
+  name: string;
+  consentText: string | null;
+  fields: (Omit<IntakeFormField, 'prefillFrom'> & { value?: string })[];
+}
+
+export interface IntakeAnswer {
+  key: string;
+  label: string;
+  value: string;
+}
+
+/** Submitted pre-chat answers, visible to consultants handling the conversation. */
+export interface ConversationIntakeResponse {
+  formName: string | null;
+  formVersion: number;
+  answers: IntakeAnswer[];
+  consentAt: string | null;
+  submittedAt: string;
+}
+
+/** Result of a visitor topic or form submission: routed, or the next intake step. */
+export interface IntakeSubmitResult {
+  routed: ConversationRoutingEvent | null;
+  intake: IntakePrompt | null;
 }
 
 /** A conversation offered to one consultant, who must accept before `expiresAt`. */
@@ -165,6 +228,7 @@ export interface ConversationOfferEvent {
   offerId: string;
   conversation: ConversationResponse;
   firstMessage: string | null;
+  intake: ConversationIntakeResponse | null;
   offeredAt: string;
   expiresAt: string;
 }
@@ -215,6 +279,8 @@ export interface WidgetBootstrapResponse {
   departments: WidgetDepartment[];
   /** Topics offered as buttons before the first message; empty when the tenant has none. */
   topics: WidgetTopic[];
+  /** The form to complete before the first message (BEFORE_CHAT timing only). */
+  form?: WidgetIntakeForm;
 }
 
 export interface WidgetDepartment {

@@ -15,6 +15,8 @@ const settingsSelect = {
   autoRouteThreshold: true,
   confirmThreshold: true,
   topicPromptTimeoutSeconds: true,
+  intakeFormTiming: true,
+  defaultIntakeFormId: true,
 } as const;
 
 @Injectable()
@@ -48,6 +50,16 @@ export class RoutingSettingsService {
         throw new BadRequestException({
           code: 'INVALID_THRESHOLDS',
           message: 'The confirm threshold must be below the auto-route threshold',
+        });
+    }
+    if (input.defaultIntakeFormId) {
+      const form = await this.prisma.intakeForm.count({
+        where: { id: input.defaultIntakeFormId, businessId: auth.business.id, status: 'ACTIVE' },
+      });
+      if (!form)
+        throw new BadRequestException({
+          code: 'INTAKE_FORM_NOT_FOUND',
+          message: 'The selected form does not exist',
         });
     }
     const settings = await this.prisma.routingSettings.upsert({

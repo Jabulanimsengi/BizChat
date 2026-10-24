@@ -10,4 +10,6 @@ export const DEFAULT_ROUTING_SETTINGS: RoutingSettingsResponse = {
   autoRouteThreshold: 0.6,
   confirmThreshold: 0.35,
   topicPromptTimeoutSeconds: 60,
+  intakeFormTiming: 'AFTER_TOPIC',
+  defaultIntakeFormId: null,
 };

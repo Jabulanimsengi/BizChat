@@ -32,11 +32,18 @@ departmentPublicId? }`. When the tenant has topics and no topic or department is
   the visitor chooses (or the prompt expires); with `mode: 'CONFIRM'` the chat is already routing and
   the visitor may change the topic.
 - Client to server `conversation.intake.submit`: `{ conversationId, topicPublicId }` where `null`
-  means "Something else" (the default topic). Returns the routing event, or `TOPIC_LOCKED` once a
-  consultant has been offered or assigned the chat. `conversation.resume` re-sends an unanswered
+  means "Something else" (the default topic). Returns `{ routed, intake }` (see forms below), or
+  `TOPIC_LOCKED` once a consultant has been offered or assigned the chat. `conversation.resume` re-sends an unanswered
   `ASK` prompt.
 - Bootstrap includes `topics`: the tenant's quick-reply topics, shown as buttons before the first
-  message.
+  message, and `form` when the tenant asks for a form before the chat (`BEFORE_CHAT`). In that mode
+  `conversation.start` must include `intake: { answers, consent? }`.
+- An `intake` prompt with `step: 'FORM'` carries the form to complete; routing waits. Client to server
+  `conversation.intake.form`: `{ conversationId, answers, consent? }` returns `{ routed, intake }`, or
+  `INTAKE_INVALID` with `details.fieldErrors`. `conversation.intake.submit` also returns
+  `{ routed, intake }`, where `intake` is the form when the chosen topic needs one.
+- Server to client `conversation.intake.required`: `{ conversationId, prompt }` when the server starts
+  an intake step itself (a topic prompt timed out into a topic with a form).
 - Client to server `conversation.resume`: `{ conversationId, afterSequence?, limit? }`
 - Client to server `conversation.history`: `{ conversationId, beforeSequence, limit? }`
 - Client to server `message.send`: `{ conversationId, clientMessageId, content }`

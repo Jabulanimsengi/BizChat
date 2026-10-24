@@ -6,6 +6,8 @@ export const integrationScopes = [
   'messages:read',
   'messages:write',
   'customers:identify',
+  // Pre-chat form answers are personal information, so reading them needs its own scope.
+  'intake:read',
 ] as const;
 export const webhookEvents = [
   'conversation.created',
@@ -39,11 +41,26 @@ export const historySchema = z
   })
   .strict();
 export const customerSchema = z.object({ externalId: z.string().trim().min(1).max(200) }).strict();
+/** Optional name and email claims pre-fill matching pre-chat form fields for this customer. */
+export const identifySchema = customerSchema
+  .extend({
+    name: z.string().trim().min(1).max(100).optional(),
+    email: z.string().trim().email().max(254).optional(),
+  })
+  .strict();
+export type IdentifyInput = z.infer<typeof identifySchema>;
 export const startSchema = customerSchema
   .extend({
     content: z.string().trim().min(1).max(4000),
     departmentPublicId: z.string().max(64).optional(),
     topicPublicId: z.string().max(64).optional(),
+    intake: z
+      .object({
+        answers: z.record(z.string().max(40), z.string().max(500)),
+        consent: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     subject: z.string().trim().max(240).optional(),
   })
   .strict();

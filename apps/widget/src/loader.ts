@@ -5,12 +5,14 @@ import type {
   ConversationRoutingEvent,
   ConversationSessionResponse,
   IntakePrompt,
+  IntakeSubmitResult,
   MessagePage,
   MessageReceiptEvent,
   MessageResponse,
   SocketAck,
   TypingEvent,
   WidgetBootstrapResponse,
+  WidgetIntakeForm,
   WidgetTopic,
 } from '@bizchat/types';
 import { io, type Socket } from 'socket.io-client';
@@ -48,6 +50,8 @@ class BizChatWidgetElement extends HTMLElement {
   private selectedTopic?: string;
   private intake?: IntakePrompt;
   private changingTopic = false;
+  /** Default form answered with the first message (BEFORE_CHAT timing). */
+  private beforeChatForm?: WidgetIntakeForm;
   private hasEarlier = false;
   private sending = false;
   private heartbeatTimer?: number;
@@ -80,7 +84,7 @@ class BizChatWidgetElement extends HTMLElement {
     style.nonce = this.getAttribute('style-nonce') ?? '';
     style.textContent = widgetStyles;
     const shell = document.createElement('div');
-    shell.innerHTML = `<section class="panel" role="dialog" aria-label="Business chat" hidden><header class="header"><div class="header-row"><div><p class="eyebrow">Customer care</p><h2 class="title">BizChat</h2></div><button class="close" type="button" aria-label="Close chat">&times;</button></div></header><div class="status-strip"><span class="status"><span class="dot connecting" data-connection-dot></span><span data-connection>connecting</span></span><span class="status"><span class="dot" data-team-dot></span><span data-team>Team status unknown</span></span></div><div class="body" data-scroll><div class="loading" data-loading>Preparing secure chat&hellip;</div><div class="error-box" data-error hidden></div><div data-chat hidden><div class="welcome"><h3 data-greeting></h3><p>Send a message and the team can reply here.</p><label class="department-picker" data-department-picker hidden><span>Choose a department</span><select data-department aria-label="Choose a department"></select></label></div><button class="load-earlier" type="button" data-load-earlier hidden>Load earlier messages</button><ol class="messages" data-messages aria-live="polite"></ol><div class="topic-picker" data-topic-picker role="group" hidden><p data-topic-prompt></p><div class="topic-options" data-topic-options></div></div><div class="typing" data-typing hidden><span></span><span></span><span></span><em>Consultant is typing</em></div></div></div><form class="composer" data-composer><div class="composer-row"><input data-attachment type="file" hidden accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,.txt,.csv"><button class="attach" type="button" disabled aria-label="Attach a file">&#128206;</button><textarea rows="2" disabled placeholder="Write a message" aria-label="Message composer" maxlength="4000"></textarea><button class="send" type="submit" disabled aria-label="Send message">${sendIcon}</button></div><p class="composer-note" data-composer-note>Your anonymous identity is stored only for this browser.</p></form></section><button class="launcher" type="button" aria-label="Open chat"><span data-launcher-content>${chatIcon}</span><span class="unread-badge" data-unread hidden>0</span></button>`;
+    shell.innerHTML = `<section class="panel" role="dialog" aria-label="Business chat" hidden><header class="header"><div class="header-row"><div><p class="eyebrow">Customer care</p><h2 class="title">BizChat</h2></div><button class="close" type="button" aria-label="Close chat">&times;</button></div></header><div class="status-strip"><span class="status"><span class="dot connecting" data-connection-dot></span><span data-connection>connecting</span></span><span class="status"><span class="dot" data-team-dot></span><span data-team>Team status unknown</span></span></div><div class="body" data-scroll><div class="loading" data-loading>Preparing secure chat&hellip;</div><div class="error-box" data-error hidden></div><div data-chat hidden><div class="welcome"><h3 data-greeting></h3><p>Send a message and the team can reply here.</p><label class="department-picker" data-department-picker hidden><span>Choose a department</span><select data-department aria-label="Choose a department"></select></label></div><button class="load-earlier" type="button" data-load-earlier hidden>Load earlier messages</button><ol class="messages" data-messages aria-live="polite"></ol><div class="topic-picker" data-topic-picker role="group" hidden><p data-topic-prompt></p><div class="topic-options" data-topic-options></div></div><form class="intake-form" data-intake-form novalidate hidden></form><div class="typing" data-typing hidden><span></span><span></span><span></span><em>Consultant is typing</em></div></div></div><form class="composer" data-composer><div class="composer-row"><input data-attachment type="file" hidden accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,.txt,.csv"><button class="attach" type="button" disabled aria-label="Attach a file">&#128206;</button><textarea rows="2" disabled placeholder="Write a message" aria-label="Message composer" maxlength="4000"></textarea><button class="send" type="submit" disabled aria-label="Send message">${sendIcon}</button></div><p class="composer-note" data-composer-note>Your anonymous identity is stored only for this browser.</p></form></section><button class="launcher" type="button" aria-label="Open chat"><span data-launcher-content>${chatIcon}</span><span class="unread-badge" data-unread hidden>0</span></button>`;
     shadow.append(style, shell);
     const panel = this.element<HTMLElement>('.panel');
     const launcher = this.element<HTMLButtonElement>('.launcher');
@@ -191,6 +195,7 @@ class BizChatWidgetElement extends HTMLElement {
     );
     // The CDN-hosted widget may briefly run against an API that predates topics.
     this.topics = result.topics ?? [];
+    this.beforeChatForm = result.form;
     // Topic buttons replace the department picker when the business has topics.
     picker.hidden =
       !result.config.departmentSelectionEnabled ||
@@ -287,6 +292,13 @@ class BizChatWidgetElement extends HTMLElement {
         this.setComposerNote('Your place in the queue expired. Send a message to start again.');
       }
     });
+    this.socket.on(
+      'conversation.intake.required',
+      (event: { conversationId: string; prompt: IntakePrompt }) => {
+        if (event.conversationId !== this.conversationId) return;
+        this.applyIntakeResult({ routed: null, intake: event.prompt });
+      },
+    );
     this.socket.on('conversation.recovery', (event: ConversationRecoveryEvent) => {
       if (event.conversationId !== this.conversationId) return;
       if (event.state === 'DISCONNECTED_GRACE')
@@ -317,6 +329,7 @@ class BizChatWidgetElement extends HTMLElement {
   }
 
   private renderTopicPicker(): void {
+    this.renderIntakeForm();
     const container = this.element<HTMLElement>('[data-topic-picker]');
     const prompt = this.element('[data-topic-prompt]');
     const options = this.element('[data-topic-options]');
@@ -349,7 +362,7 @@ class BizChatWidgetElement extends HTMLElement {
       return;
     }
     const intake = this.intake;
-    if (!intake) {
+    if (!intake || intake.step === 'FORM') {
       container.hidden = true;
       return;
     }
@@ -377,7 +390,7 @@ class BizChatWidgetElement extends HTMLElement {
 
   private async chooseTopic(topicPublicId: string | null): Promise<void> {
     if (!this.conversationId) return;
-    const result = await this.emit<ConversationRoutingEvent>('conversation.intake.submit', {
+    const result = await this.emit<IntakeSubmitResult>('conversation.intake.submit', {
       conversationId: this.conversationId,
       topicPublicId,
     });
@@ -389,10 +402,139 @@ class BizChatWidgetElement extends HTMLElement {
       }
       return;
     }
-    this.intake = undefined;
     this.changingTopic = false;
+    this.applyIntakeResult(result.data);
+  }
+
+  /** Shows the next intake step, or the routing state once intake is complete. */
+  private applyIntakeResult(result: IntakeSubmitResult): void {
+    this.intake = result.intake ?? undefined;
     this.renderTopicPicker();
-    this.showRoutingState(result.data);
+    if (this.intake?.step === 'FORM')
+      this.setComposerNote('Please complete the short form so we can connect you.');
+    else if (result.routed) this.showRoutingState(result.routed);
+  }
+
+  /**
+   * The pre-chat form: before the first message (BEFORE_CHAT, sent with it) or as an intake step
+   * (submitted on its own). Built with DOM APIs so business-provided labels are never parsed as HTML.
+   */
+  private renderIntakeForm(): void {
+    const container = this.element<HTMLFormElement>('[data-intake-form]');
+    const pending = this.intake?.step === 'FORM' ? this.intake.form : undefined;
+    const form = pending ?? (!this.conversationId ? this.beforeChatForm : undefined);
+    if (!form) {
+      container.hidden = true;
+      container.replaceChildren();
+      return;
+    }
+    const heading = document.createElement('p');
+    heading.className = 'intake-title';
+    heading.textContent = pending ? 'A few details first' : form.name;
+    const fields = form.fields.map((field) => {
+      const label = document.createElement('label');
+      label.className = 'intake-field';
+      const caption = document.createElement('span');
+      caption.textContent = field.required ? `${field.label} *` : field.label;
+      let input: HTMLInputElement | HTMLSelectElement;
+      if (field.type === 'SELECT') {
+        input = document.createElement('select');
+        input.append(
+          new Option('Choose…', ''),
+          ...(field.options ?? []).map((option) => new Option(option, option)),
+        );
+      } else {
+        input = document.createElement('input');
+        input.type = field.type === 'EMAIL' ? 'email' : field.type === 'PHONE' ? 'tel' : 'text';
+        input.maxLength = field.mask?.length ?? field.maxLength ?? 200;
+        if (field.mask) input.placeholder = field.mask.replace(/#/g, '0');
+      }
+      input.name = field.key;
+      input.required = field.required;
+      if (field.value) input.value = field.value;
+      const error = document.createElement('em');
+      error.className = 'intake-error';
+      error.dataset.errorFor = field.key;
+      error.hidden = true;
+      label.append(caption, input, error);
+      return label;
+    });
+    const parts: HTMLElement[] = [heading, ...fields];
+    if (form.consentText) {
+      const consent = document.createElement('label');
+      consent.className = 'intake-consent';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.name = 'consent';
+      const text = document.createElement('span');
+      text.textContent = form.consentText;
+      const error = document.createElement('em');
+      error.className = 'intake-error';
+      error.dataset.errorFor = 'consent';
+      error.hidden = true;
+      consent.append(box, text, error);
+      parts.push(consent);
+    }
+    if (pending) {
+      const submit = document.createElement('button');
+      submit.type = 'submit';
+      submit.className = 'topic selected';
+      submit.textContent = 'Continue';
+      parts.push(submit);
+    }
+    container.replaceChildren(...parts);
+    container.onsubmit = (event) => {
+      event.preventDefault();
+      void this.submitIntakeForm();
+    };
+    container.hidden = false;
+  }
+
+  /** Answers from the rendered form, or null after marking missing required fields. */
+  private collectIntakeAnswers(): { answers: Record<string, string>; consent: boolean } | null {
+    const container = this.element<HTMLFormElement>('[data-intake-form]');
+    const errors: Record<string, string> = {};
+    const answers: Record<string, string> = {};
+    for (const input of Array.from(
+      container.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+        'input[name]:not([type=checkbox]), select[name]',
+      ),
+    )) {
+      const value = input.value.trim();
+      if (value) answers[input.name] = value;
+      else if (input.required) errors[input.name] = 'Required';
+    }
+    const consentBox = container.querySelector<HTMLInputElement>('input[name=consent]');
+    if (consentBox && !consentBox.checked) errors.consent = 'Please confirm to continue';
+    this.showIntakeErrors(errors);
+    return Object.keys(errors).length > 0
+      ? null
+      : { answers, consent: consentBox?.checked ?? false };
+  }
+
+  private showIntakeErrors(errors: Record<string, string>): void {
+    const container = this.element<HTMLFormElement>('[data-intake-form]');
+    for (const element of Array.from(container.querySelectorAll<HTMLElement>('[data-error-for]'))) {
+      const message = errors[element.dataset.errorFor ?? ''];
+      element.textContent = message ?? '';
+      element.hidden = !message;
+    }
+  }
+
+  private async submitIntakeForm(): Promise<void> {
+    if (!this.conversationId) return;
+    const collected = this.collectIntakeAnswers();
+    if (!collected) return;
+    const result = await this.emit<IntakeSubmitResult>('conversation.intake.form', {
+      conversationId: this.conversationId,
+      ...collected,
+    });
+    if (!result.ok) {
+      this.showIntakeErrors(fieldErrors(result.error.details));
+      this.setComposerNote(result.error.message, true);
+      return;
+    }
+    this.applyIntakeResult(result.data);
   }
 
   private async resumeConversation(): Promise<void> {
@@ -434,6 +576,13 @@ class BizChatWidgetElement extends HTMLElement {
     const textarea = this.element<HTMLTextAreaElement>('textarea');
     const content = (retry?.content ?? textarea.value).trim();
     if (!content || this.sending || !this.socket?.connected) return;
+    // The before-chat form travels with the message that starts the conversation.
+    const intakeAnswers =
+      !this.conversationId && this.beforeChatForm ? this.collectIntakeAnswers() : undefined;
+    if (intakeAnswers === null) {
+      this.setComposerNote('Please complete the form above before sending.', true);
+      return;
+    }
     this.stopTyping();
     const clientMessageId = retry?.clientMessageId ?? crypto.randomUUID();
     const optimistic = retry ?? this.optimisticMessage(clientMessageId, content);
@@ -455,6 +604,7 @@ class BizChatWidgetElement extends HTMLElement {
           clientMessageId,
           content,
           ...this.startTarget(),
+          ...(intakeAnswers ? { intake: intakeAnswers } : {}),
         });
     this.sending = false;
     if (!result.ok) {
@@ -467,6 +617,8 @@ class BizChatWidgetElement extends HTMLElement {
       }
       optimistic.pending = false;
       optimistic.failed = true;
+      if (result.error.code === 'INTAKE_INVALID')
+        this.showIntakeErrors(fieldErrors(result.error.details));
       this.setComposerNote(result.error.message, true);
       this.renderMessages();
       return;
@@ -482,7 +634,9 @@ class BizChatWidgetElement extends HTMLElement {
       this.selectedTopic = undefined;
       this.intake = result.data.intake;
       this.renderTopicPicker();
-      if (this.intake?.mode === 'ASK')
+      if (this.intake?.step === 'FORM')
+        this.setComposerNote('Please complete the short form so we can connect you.');
+      else if (this.intake?.mode === 'ASK')
         this.setComposerNote('Choose a topic below so we can connect you with the right person.');
       else
         this.showRoutingState({
@@ -833,6 +987,12 @@ export function formatBytes(value: number): string {
     ? `${Math.max(1, Math.ceil(value / 1024))} KB`
     : `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
+/** Per-field problems from an `INTAKE_INVALID` acknowledgement. */
+function fieldErrors(details: unknown): Record<string, string> {
+  const errors = (details as { fieldErrors?: unknown } | undefined)?.fieldErrors;
+  return errors && typeof errors === 'object' ? (errors as Record<string, string>) : {};
+}
+
 function messageFrom(cause: unknown): string {
   return cause instanceof Error ? cause.message : 'This chat is unavailable';
 }

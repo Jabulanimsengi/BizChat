@@ -13,6 +13,7 @@ import {
   type MessageReceipt,
 } from '@prisma/client';
 import type {
+  ConversationIntakeResponse,
   ConversationPage,
   ConversationResponse,
   ConversationSessionResponse,
@@ -57,6 +58,7 @@ import {
 import { ConversationTimelineService } from './conversation-timeline.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
 import { IntakeService } from '../intake/intake.service';
+import { IntakeFormService } from '../intake/intake-form.service';
 import { classificationRecord, TopicCatalogService } from '../intake/topic-catalog.service';
 
 const OPEN_VISITOR_STATUSES = [
@@ -113,6 +115,7 @@ export class ConversationService {
     private readonly routing: ConversationRoutingService,
     private readonly topics: TopicCatalogService,
     private readonly intake: IntakeService,
+    private readonly forms: IntakeFormService,
   ) {}
 
   public async startVisitor(
@@ -137,6 +140,21 @@ export class ConversationService {
           ...(input.topicPublicId ? { topicPublicId: input.topicPublicId } : {}),
           canAsk: true,
         });
+    // Pre-chat form: answered with the first message (BEFORE_CHAT), or asked once the topic is known.
+    const beforeChatForm = await this.forms.beforeChatForm(identity.businessId);
+    const afterTopic =
+      beforeChatForm || intake?.intakeStatus === 'AWAITING_TOPIC'
+        ? null
+        : await this.forms.requirement(
+            identity.businessId,
+            intake?.routing.topicId ?? null,
+            identity.visitorId,
+          );
+    const intakeStatus = afterTopic
+      ? afterTopic.autoAnswers
+        ? 'COMPLETE'
+        : 'AWAITING_FORM'
+      : (intake?.intakeStatus ?? 'NOT_REQUIRED');
 
     let outcome: {
       conversation: Conversation;
@@ -263,19 +281,27 @@ export class ConversationService {
                 code: 'DEPARTMENT_NOT_FOUND',
                 message: 'The selected department is unavailable',
               });
+            // Only a message that starts a conversation must carry the before-chat answers.
+            const beforeChatAnswers = beforeChatForm
+              ? this.forms.validate(
+                  beforeChatForm,
+                  input.intake ?? { answers: {} },
+                  await this.forms.prefill(beforeChatForm, identity.visitorId),
+                )
+              : null;
             conversation = await transaction.conversation.create({
               data: {
                 businessId: identity.businessId,
                 visitorId: identity.visitorId,
                 source: 'WEB_WIDGET',
                 departmentId: department?.id,
+                intakeStatus,
                 ...(intake
                   ? {
                       topicId: intake.routing.topicId,
                       priority: intake.routing.priority,
                       requiredSkillId: intake.routing.requiredSkillId,
                       requiredSkillMinProficiency: intake.routing.requiredSkillMinProficiency,
-                      intakeStatus: intake.intakeStatus,
                       intakeExpiresAt: intake.intakeExpiresAt,
                     }
                   : {}),
@@ -300,6 +326,24 @@ export class ConversationService {
               await transaction.conversationClassification.create({
                 data: classificationRecord(identity.businessId, conversation.id, intake),
               });
+            if (beforeChatForm && beforeChatAnswers)
+              await this.forms.record(
+                transaction,
+                identity.businessId,
+                conversation.id,
+                beforeChatForm,
+                beforeChatAnswers,
+                input.intake?.consent ?? false,
+              );
+            else if (afterTopic?.autoAnswers)
+              await this.forms.record(
+                transaction,
+                identity.businessId,
+                conversation.id,
+                afterTopic.form,
+                afterTopic.autoAnswers,
+                false,
+              );
             conversationCreated = true;
           }
         }
@@ -354,7 +398,12 @@ export class ConversationService {
     }
     const response = await this.sessionResponse(identity, outcome.conversation, outcome.message);
     // A new conversation's prompt lists the best-matching topics first.
-    const prompt = outcome.conversationCreated ? this.intake.prompt(intake) : undefined;
+    const prompt =
+      outcome.conversationCreated && afterTopic && !afterTopic.autoAnswers
+        ? this.intake.formPrompt(afterTopic)
+        : outcome.conversationCreated
+          ? this.intake.prompt(intake)
+          : undefined;
     return prompt ? { ...response, intake: prompt } : response;
   }
 
@@ -870,6 +919,15 @@ export class ConversationService {
     conversationId: string,
   ): Promise<ConversationResponse> {
     return this.conversationResponse(await this.findDashboardConversation(auth, conversationId));
+  }
+
+  /** Pre-chat answers for a conversation the consultant may see. */
+  public async getDashboardIntake(
+    auth: AuthContext,
+    conversationId: string,
+  ): Promise<ConversationIntakeResponse | null> {
+    await this.findDashboardConversation(auth, conversationId);
+    return this.forms.forConversation(conversationId);
   }
 
   public async authorizeVisitor(

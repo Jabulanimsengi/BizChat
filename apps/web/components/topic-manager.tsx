@@ -3,6 +3,7 @@
 import type {
   ConversationPriority,
   DepartmentResponse,
+  IntakeFormResponse,
   RoutingSettingsResponse,
   SkillResponse,
   TopicKeyword,
@@ -12,6 +13,7 @@ import type {
 import { FlaskConical, LoaderCircle, Plus, Tags } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
+import { ROUTING_CONFIG_CHANGED } from '../lib/routing-config-events';
 import { Button } from './ui/button';
 
 interface TopicDraft {
@@ -28,6 +30,7 @@ interface TopicDraft {
   showAsQuickReply: boolean;
   isDefault: boolean;
   sortOrder: string;
+  intakeFormId: string;
 }
 
 const EMPTY_DRAFT: TopicDraft = {
@@ -43,6 +46,7 @@ const EMPTY_DRAFT: TopicDraft = {
   showAsQuickReply: true,
   isDefault: false,
   sortOrder: '0',
+  intakeFormId: '',
 };
 
 const fieldClass =
@@ -53,6 +57,7 @@ export function TopicManager() {
   const [topics, setTopics] = useState<TopicResponse[]>([]);
   const [departments, setDepartments] = useState<DepartmentResponse[]>([]);
   const [skills, setSkills] = useState<SkillResponse[]>([]);
+  const [forms, setForms] = useState<IntakeFormResponse[]>([]);
   const [settings, setSettings] = useState<RoutingSettingsResponse>();
   const [draft, setDraft] = useState<TopicDraft>(EMPTY_DRAFT);
   const [testMessage, setTestMessage] = useState('');
@@ -86,6 +91,24 @@ export function TopicManager() {
     };
   }, []);
 
+  // Skills and forms are edited in other sections of this page; keep the pickers current.
+  useEffect(() => {
+    const refresh = (): void => {
+      void Promise.all([
+        apiRequest<SkillResponse[]>('/skills'),
+        apiRequest<IntakeFormResponse[]>('/intake-forms'),
+      ])
+        .then(([skillList, formList]) => {
+          setSkills(skillList.filter(({ status }) => status === 'ACTIVE'));
+          setForms(formList.filter(({ status }) => status === 'ACTIVE'));
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    window.addEventListener(ROUTING_CONFIG_CHANGED, refresh);
+    return () => window.removeEventListener(ROUTING_CONFIG_CHANGED, refresh);
+  }, []);
+
   async function run(action: () => Promise<void>, success?: string): Promise<void> {
     setBusy(true);
     setNotice(undefined);
@@ -115,6 +138,7 @@ export function TopicManager() {
       showAsQuickReply: draft.showAsQuickReply,
       isDefault: draft.isDefault,
       sortOrder: Number(draft.sortOrder),
+      intakeFormId: draft.intakeFormId || null,
     };
     return run(
       async () => {
@@ -295,6 +319,21 @@ export function TopicManager() {
               {skills.map((skill) => (
                 <option key={skill.id} value={skill.id}>
                   {skill.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs font-medium text-slate-500">
+            Pre-chat form
+            <select
+              value={draft.intakeFormId}
+              onChange={(event) => setDraft({ ...draft, intakeFormId: event.target.value })}
+              className={fieldClass}
+            >
+              <option value="">Default form (if any)</option>
+              {forms.map((form) => (
+                <option key={form.id} value={form.id}>
+                  {form.name}
                 </option>
               ))}
             </select>
@@ -569,6 +608,7 @@ function draftFrom(topic: TopicResponse): TopicDraft {
     showAsQuickReply: topic.showAsQuickReply,
     isDefault: topic.isDefault,
     sortOrder: String(topic.sortOrder),
+    intakeFormId: topic.intakeFormId ?? '',
   };
 }
 

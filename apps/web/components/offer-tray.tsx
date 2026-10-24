@@ -3,6 +3,7 @@
 import type { ConversationOfferEvent } from '@bizchat/types';
 import { BellRing } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { AnswerList } from './intake-answers';
 import { Button } from './ui/button';
 
 /** Chats offered to this consultant, each with a live countdown to its expiry. */
@@ -59,6 +60,9 @@ export function OfferTray({
             </div>
             {offer.firstMessage ? (
               <p className="mt-2 line-clamp-2 text-sm text-slate-600">“{offer.firstMessage}”</p>
+            ) : null}
+            {offer.intake?.answers.length ? (
+              <AnswerList answers={offer.intake.answers} limit={3} />
             ) : null}
             <div className="mt-3 flex gap-2">
               <Button

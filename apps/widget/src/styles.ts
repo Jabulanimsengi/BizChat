@@ -35,6 +35,15 @@ export const widgetStyles = `
   .topic { padding: 7px 11px; border: 1px solid #c9d6ce; border-radius: 999px; background: white; color: #155f43; cursor: pointer; font-size: 12px; font-weight: 600; }
   .topic:hover, .topic:focus-visible { border-color: #155f43; outline: none; }
   .topic.selected { border-color: #155f43; background: #155f43; color: white; }
+  .intake-form { margin: 14px 0 0; padding: 12px; border: 1px solid #dce4de; border-radius: 14px; background: #f7f9f8; display: grid; gap: 9px; }
+  .intake-title { margin: 0; color: #26342d; font-size: 12px; font-weight: 650; }
+  .intake-field { display: grid; gap: 4px; color: #526159; font-size: 11px; font-weight: 600; }
+  .intake-field input, .intake-field select { height: 34px; border: 1px solid #dce4de; border-radius: 10px; padding: 0 9px; color: #12211b; background: white; font: inherit; font-size: 12px; outline: none; }
+  .intake-field input:focus, .intake-field select:focus { border-color: #155f43; }
+  .intake-consent { display: grid; grid-template-columns: auto 1fr; gap: 7px; align-items: start; color: #526159; font-size: 11px; }
+  .intake-consent .intake-error { grid-column: 1 / -1; }
+  .intake-error { color: #b42318; font-size: 10px; font-style: normal; }
+  .intake-form .topic { justify-self: start; }
   .messages { list-style: none; padding: 0; margin: 18px 0 0; display: flex; flex-direction: column; gap: 10px; }
   .message { display: flex; }
   .message.outgoing { justify-content: flex-end; }

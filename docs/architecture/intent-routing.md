@@ -1,6 +1,6 @@
 # Phase B: intent routing, offers, overflow, and pre-chat intake
 
-Status: **B1-B3 implemented; B4-B5 proposed**. This document defines the design for Phase B. It builds
+Status: **B1-B4 implemented; B5 proposed**. This document defines the design for Phase B. It builds
 on the Phase A routing changes (ordered, coalesced queue drains; single-instance reliability sweep;
 queue abandonment).
 
@@ -46,6 +46,23 @@ B3 as built (section 1), with these differences from the design:
 - The integration API accepts `topicPublicId`; otherwise it classifies the subject and first message
   and, with nobody to ask, uses the default topic for uncertain results (method `DEFAULT`).
 - Conversations expose `topicId` and `intakeStatus`; the inbox does not show the topic name yet.
+
+B4 as built (section 2), with these differences from the design:
+
+- The default form and `intakeFormTiming` live on `routing_settings` (not `widget_settings`). With
+  `AFTER_TOPIC`, a topic without its own form uses the default form, including tenants that have no
+  topics at all.
+- A conversation waiting for a form has `intakeStatus = AWAITING_FORM`; routing, queue drains, and the
+  sweep skip it until the visitor submits. There is no timeout for a form (the answers are required);
+  abandonment still closes the chat if the visitor leaves.
+- When identity claims answer every required field and there is no consent text, the answers are
+  stored without asking. Identity proofs now accept optional `name` and `email` claims, stored on
+  `integration_customers`; the latest proof wins and omitted claims keep the stored value.
+- A visitor submits at most one form per conversation; changing topic afterwards does not ask again.
+- Form validation errors return `INTAKE_INVALID` with `details.fieldErrors` keyed by field, so the
+  widget marks each field. Forms hold 1-10 fields (also enforced by a database check).
+- If a topic prompt times out into a topic with a form, a connected widget receives
+  `conversation.intake.required` with the form.
 
 ## Goal
 

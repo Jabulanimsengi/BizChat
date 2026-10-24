@@ -125,6 +125,16 @@ const clientMessageIdSchema = z.string().uuid();
 const messageContentSchema = z.string().trim().min(1).max(4000);
 const sequenceSchema = z.string().regex(/^\d+$/);
 
+/** Raw pre-chat answers keyed by field key; checked against the form by `validateIntakeAnswers`. */
+export const intakeAnswersSchema = z
+  .object({
+    answers: z
+      .record(z.string().regex(/^[a-z][a-z0-9_]{0,39}$/), z.string().max(500))
+      .refine((answers) => Object.keys(answers).length <= 10, 'Too many answers'),
+    consent: z.boolean().optional(),
+  })
+  .strict();
+
 export const conversationStartSchema = z.object({
   clientMessageId: clientMessageIdSchema,
   content: messageContentSchema,
@@ -138,7 +148,160 @@ export const conversationStartSchema = z.object({
     .trim()
     .regex(/^topic_[A-Za-z0-9_-]{8,60}$/)
     .optional(),
+  /** Answers to the default form when the tenant asks for it before the chat starts. */
+  intake: intakeAnswersSchema.optional(),
 });
+
+export const intakeFormSubmitSchema = intakeAnswersSchema
+  .extend({ conversationId: z.string().uuid() })
+  .strict();
+
+const intakeFieldSchema = z
+  .object({
+    key: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/),
+    label: z.string().trim().min(1).max(80),
+    type: z.enum(['TEXT', 'EMAIL', 'PHONE', 'SELECT', 'REFERENCE']),
+    required: z.boolean().default(false),
+    maxLength: z.number().int().min(1).max(200).optional(),
+    options: z.array(z.string().trim().min(1).max(80)).min(1).max(20).optional(),
+    mask: z.string().min(1).max(40).optional(),
+    prefillFrom: z.enum(['name', 'email']).optional(),
+  })
+  .strict()
+  .superRefine((field, context) => {
+    if (field.type === 'SELECT' && !field.options)
+      context.addIssue({
+        code: 'custom',
+        message: 'A choice field needs options',
+        path: ['options'],
+      });
+    if (field.type !== 'SELECT' && field.options)
+      context.addIssue({
+        code: 'custom',
+        message: 'Only choice fields have options',
+        path: ['options'],
+      });
+    if (field.type === 'REFERENCE' && !field.mask)
+      context.addIssue({
+        code: 'custom',
+        message: 'A reference field needs a format',
+        path: ['mask'],
+      });
+    if (field.type !== 'REFERENCE' && field.mask)
+      context.addIssue({
+        code: 'custom',
+        message: 'Only reference fields have a format',
+        path: ['mask'],
+      });
+    if (field.prefillFrom && field.type !== 'TEXT' && field.type !== 'EMAIL')
+      context.addIssue({
+        code: 'custom',
+        message: 'Only text and email fields can be prefilled',
+        path: ['prefillFrom'],
+      });
+  });
+
+const intakeFieldsSchema = z
+  .array(intakeFieldSchema)
+  .min(1)
+  .max(10)
+  .refine(
+    (fields) => new Set(fields.map(({ key }) => key)).size === fields.length,
+    'Each field key can be used once',
+  );
+
+export const createIntakeFormSchema = z
+  .object({
+    name: z.string().trim().min(2).max(100),
+    fields: intakeFieldsSchema,
+    consentText: z.string().trim().min(1).max(1000).nullable().optional(),
+  })
+  .strict();
+
+export const updateIntakeFormSchema = z
+  .object({
+    name: z.string().trim().min(2).max(100).optional(),
+    fields: intakeFieldsSchema.optional(),
+    consentText: z.string().trim().min(1).max(1000).nullable().optional(),
+    status: z.enum(['ACTIVE', 'DISABLED']).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+
+/**
+ * Character-by-character format check: `#` digit, `A` letter, `*` letter or digit, anything else
+ * must match literally. Linear in the input, so a business-defined format cannot stall the server.
+ */
+export function matchesMask(value: string, mask: string): boolean {
+  if (value.length !== mask.length) return false;
+  for (let index = 0; index < mask.length; index += 1) {
+    const expected = mask[index]!;
+    const actual = value[index]!;
+    const digit = actual >= '0' && actual <= '9';
+    const letter = /^[A-Za-z]$/.test(actual);
+    if (
+      expected === '#'
+        ? !digit
+        : expected === 'A'
+          ? !letter
+          : expected === '*'
+            ? !(digit || letter)
+            : actual !== expected
+    )
+      return false;
+  }
+  return true;
+}
+
+const emailSchema = z.string().email().max(254);
+const PHONE = /^\+?[0-9 ()-]{7,20}$/;
+
+export type IntakeValidation =
+  | { ok: true; answers: { key: string; label: string; value: string }[] }
+  | { ok: false; errors: Record<string, string> };
+
+/** Checks answers against a form's fields; prefilled values fill fields the visitor left out. */
+export function validateIntakeAnswers(
+  form: {
+    fields: {
+      key: string;
+      label: string;
+      type: string;
+      required: boolean;
+      maxLength?: number;
+      options?: string[];
+      mask?: string;
+    }[];
+    consentText: string | null;
+  },
+  input: { answers: Record<string, string>; consent?: boolean },
+  prefill: Record<string, string> = {},
+): IntakeValidation {
+  const errors: Record<string, string> = {};
+  const answers: { key: string; label: string; value: string }[] = [];
+  const known = new Set(form.fields.map(({ key }) => key));
+  for (const key of Object.keys(input.answers))
+    if (!known.has(key)) errors[key] = 'This field is not on the form';
+  for (const field of form.fields) {
+    const value = (input.answers[field.key] ?? prefill[field.key] ?? '').trim();
+    if (!value) {
+      if (field.required) errors[field.key] = `${field.label} is required`;
+      continue;
+    }
+    if (value.length > (field.maxLength ?? 200)) errors[field.key] = `${field.label} is too long`;
+    else if (field.type === 'EMAIL' && !emailSchema.safeParse(value).success)
+      errors[field.key] = `${field.label} must be an email address`;
+    else if (field.type === 'PHONE' && !PHONE.test(value))
+      errors[field.key] = `${field.label} must be a phone number`;
+    else if (field.type === 'SELECT' && !field.options?.includes(value))
+      errors[field.key] = `Choose one of the options for ${field.label}`;
+    else if (field.type === 'REFERENCE' && field.mask && !matchesMask(value, field.mask))
+      errors[field.key] = `${field.label} must look like ${field.mask}`;
+    else answers.push({ key: field.key, label: field.label, value });
+  }
+  if (form.consentText && !input.consent) errors.consent = 'Consent is required';
+  return Object.keys(errors).length > 0 ? { ok: false, errors } : { ok: true, answers };
+}
 
 /** The visitor's topic choice; null means "Something else" (the default topic). */
 export const intakeSubmitSchema = z
@@ -203,6 +366,8 @@ export const updateRoutingSettingsSchema = z
     autoRouteThreshold: z.number().min(0.1).max(0.95).optional(),
     confirmThreshold: z.number().min(0.05).max(0.9).optional(),
     topicPromptTimeoutSeconds: z.number().int().min(15).max(600).optional(),
+    intakeFormTiming: z.enum(['AFTER_TOPIC', 'BEFORE_CHAT']).optional(),
+    defaultIntakeFormId: z.string().uuid().nullable().optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'At least one field is required')
@@ -230,6 +395,7 @@ const topicFields = {
   showAsQuickReply: z.boolean(),
   isDefault: z.boolean(),
   sortOrder: z.number().int().min(0).max(1000),
+  intakeFormId: z.string().uuid().nullable(),
 };
 
 export const createTopicSchema = z
@@ -246,6 +412,7 @@ export const createTopicSchema = z
     showAsQuickReply: topicFields.showAsQuickReply.default(true),
     isDefault: topicFields.isDefault.default(false),
     sortOrder: topicFields.sortOrder.default(0),
+    intakeFormId: topicFields.intakeFormId.optional(),
   })
   .strict();
 
@@ -263,6 +430,7 @@ export const updateTopicSchema = z
     showAsQuickReply: topicFields.showAsQuickReply.optional(),
     isDefault: topicFields.isDefault.optional(),
     sortOrder: topicFields.sortOrder.optional(),
+    intakeFormId: topicFields.intakeFormId.optional(),
     status: z.enum(['ACTIVE', 'DISABLED']).optional(),
   })
   .strict()
@@ -562,3 +730,7 @@ export type AgentProfileUpdateInput = z.infer<typeof agentProfileUpdateSchema>;
 export type AgentPresenceUpdateInput = z.infer<typeof agentPresenceUpdateSchema>;
 export type ConversationSubscriptionInput = z.infer<typeof conversationSubscriptionSchema>;
 export type TypingUpdateInput = z.infer<typeof typingUpdateSchema>;
+export type IntakeAnswersInput = z.infer<typeof intakeAnswersSchema>;
+export type IntakeFormSubmitInput = z.infer<typeof intakeFormSubmitSchema>;
+export type CreateIntakeFormInput = z.infer<typeof createIntakeFormSchema>;
+export type UpdateIntakeFormInput = z.infer<typeof updateIntakeFormSchema>;

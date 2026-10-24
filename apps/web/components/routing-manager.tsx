@@ -9,6 +9,7 @@ import type {
 import { BellRing, GraduationCap, LoaderCircle, Plus, Route } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
+import { announceRoutingConfigChange } from '../lib/routing-config-events';
 import { Button } from './ui/button';
 
 const STRATEGIES: { value: RoutingStrategy; label: string; description: string }[] = [
@@ -81,6 +82,7 @@ export function RoutingManager() {
         body: JSON.stringify({ name, description: description.trim() || null }),
       });
       setSkills((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name)));
+      announceRoutingConfigChange();
       setName('');
       setDescription('');
     }, 'Skill created. Assign proficiency to consultants on the Users page.');
@@ -95,6 +97,7 @@ export function RoutingManager() {
           body: JSON.stringify({ status }),
         });
         setSkills((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+        announceRoutingConfigChange();
       },
       status === 'ACTIVE' ? `${skill.name} enabled.` : `${skill.name} disabled.`,
     );

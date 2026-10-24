@@ -327,3 +327,30 @@ held until the visitor chose a topic, a quick-reply topic applied without classi
 unanswered prompt falling back to the default topic. The first HTTP run failed one assertion that
 still expected the pre-B3 settings object; it passed after the expectation was updated. The widget
 prompts and dashboard topic editor were type-checked but not exercised in a browser.
+
+## Phase B4 - Pre-chat forms — 2026-10-25
+
+- Tenant forms (**Dashboard → Routing → Pre-chat forms**) with up to 10 fields: text, email, phone,
+  choice, and reference numbers checked against a business-defined format (`#` digit, `A` letter,
+  `*` either) by a linear character check, never a regular expression. Optional consent statement.
+  Changing fields or consent bumps the form version; stored answers record the version shown.
+- Timing per tenant: after the topic is known (each topic may name its form, otherwise the default
+  form) or before the first message (default form, sent with that message). Routing, queue drains,
+  and the sweep skip a conversation while it waits for a form.
+- Identity proofs accept optional `name` and `email` claims that pre-fill matching fields; when the
+  claims answer every required field and no consent is needed, the form is stored without asking.
+- Answers appear in the consultant's side panel and on offer cards, through
+  `GET /conversations/:id/intake`, and through the integration API only for keys with the new
+  `intake:read` scope. The integration API accepts and validates answers when creating a conversation.
+- Invalid answers return `INTAKE_INVALID` with per-field errors, which the widget shows next to each
+  field. Migration `20261025090000_phase_b4_intake_forms` is additive.
+
+Verification: format, lint, and type checks pass in every workspace; 183 API unit tests (coverage
+gate passed), 13 dashboard, 5 widget, and 29 validation tests pass. Against the Docker test stack,
+all 18 migrations apply to an empty database and all 28 HTTP integration tests pass, including form
+management and versioning, tenant isolation, integration answers and the `intake:read` scope,
+identity claims, and the consultant answers endpoint. The end-to-end suite passes, including the new
+`phaseB4-smoke.mjs` (form after a confident topic with per-field errors, form after a topic choice,
+and the before-chat mode). The first run failed one HTTP assertion and the B3 harness because both
+still expected pre-B4 response shapes; both were updated and the re-run passed. The widget form and
+dashboard form editor were type-checked but not exercised in a browser.

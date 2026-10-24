@@ -77,6 +77,8 @@ describe('routing configuration', () => {
       autoRouteThreshold: 0.6,
       confirmThreshold: 0.35,
       topicPromptTimeoutSeconds: 60,
+      intakeFormTiming: 'AFTER_TOPIC',
+      defaultIntakeFormId: null,
     });
   });
 
@@ -106,6 +108,8 @@ describe('routing configuration', () => {
           autoRouteThreshold: 0.6,
           confirmThreshold: 0.35,
           topicPromptTimeoutSeconds: 60,
+          intakeFormTiming: 'AFTER_TOPIC',
+          defaultIntakeFormId: null,
         },
       }),
     );

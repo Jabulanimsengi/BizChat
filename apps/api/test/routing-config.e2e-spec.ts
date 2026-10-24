@@ -132,6 +132,8 @@ describe('Routing configuration (real PostgreSQL and Redis)', () => {
       autoRouteThreshold: 0.6,
       confirmThreshold: 0.35,
       topicPromptTimeoutSeconds: 60,
+      intakeFormTiming: 'AFTER_TOPIC',
+      defaultIntakeFormId: null,
     };
     await request(server)
       .get('/api/v1/routing/settings')

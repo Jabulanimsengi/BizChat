@@ -29,6 +29,9 @@ import {
   createTopicSchema,
   updateTopicSchema,
   intakeSubmitSchema,
+  createIntakeFormSchema,
+  matchesMask,
+  validateIntakeAnswers,
 } from './index';
 
 describe('topic validation', () => {
@@ -312,5 +315,111 @@ describe('authentication validation', () => {
         timezone: 'Not/A_Timezone',
       }),
     ).toThrow();
+  });
+});
+
+describe('pre-chat form validation', () => {
+  const form = {
+    consentText: 'I agree to the privacy notice.',
+    fields: [
+      { key: 'full_name', label: 'Full name', type: 'TEXT', required: true },
+      { key: 'phone', label: 'Phone', type: 'PHONE', required: false },
+      {
+        key: 'service',
+        label: 'Service',
+        type: 'SELECT',
+        required: true,
+        options: ['Registration', 'Annual return'],
+      },
+      {
+        key: 'registration_number',
+        label: 'Registration number',
+        type: 'REFERENCE',
+        required: false,
+        mask: '####/######/##',
+      },
+    ],
+  };
+
+  it('matches masks character by character', () => {
+    expect(matchesMask('2019/123456/07', '####/######/##')).toBe(true);
+    expect(matchesMask('2019/12345/07', '####/######/##')).toBe(false);
+    expect(matchesMask('20A9/123456/07', '####/######/##')).toBe(false);
+    expect(matchesMask('AB12', 'AA##')).toBe(true);
+    expect(matchesMask('A1B2', '****')).toBe(true);
+    expect(matchesMask('A1B-', '****')).toBe(false);
+  });
+
+  it('checks a long hostile input in linear time', () => {
+    const started = Date.now();
+    expect(matchesMask('9'.repeat(100_000), '#'.repeat(40))).toBe(false);
+    expect(Date.now() - started).toBeLessThan(50);
+  });
+
+  it('accepts valid answers in form order and requires consent', () => {
+    const valid = validateIntakeAnswers(form, {
+      answers: { service: 'Registration', full_name: ' Thandi ' },
+      consent: true,
+    });
+    expect(valid).toEqual({
+      ok: true,
+      answers: [
+        { key: 'full_name', label: 'Full name', value: 'Thandi' },
+        { key: 'service', label: 'Service', value: 'Registration' },
+      ],
+    });
+    const noConsent = validateIntakeAnswers(form, {
+      answers: { service: 'Registration', full_name: 'Thandi' },
+    });
+    expect(noConsent.ok).toBe(false);
+  });
+
+  it('reports every problem by field, including unknown fields', () => {
+    const result = validateIntakeAnswers(form, {
+      answers: { phone: 'call me', service: 'Other', registration_number: '1', surprise: 'x' },
+      consent: true,
+    });
+    expect(result.ok ? [] : Object.keys(result.errors).sort()).toEqual([
+      'full_name',
+      'phone',
+      'registration_number',
+      'service',
+      'surprise',
+    ]);
+  });
+
+  it('uses prefilled values for fields the visitor left out', () => {
+    const result = validateIntakeAnswers(
+      form,
+      { answers: { service: 'Annual return' }, consent: true },
+      { full_name: 'Thandi Mokoena' },
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('validates form definitions by field type', () => {
+    expect(
+      createIntakeFormSchema.safeParse({
+        name: 'Company details',
+        fields: [{ key: 'service', label: 'Service', type: 'SELECT', required: true }],
+      }).success,
+    ).toBe(false);
+    expect(
+      createIntakeFormSchema.safeParse({
+        name: 'Company details',
+        fields: [
+          { key: 'a', label: 'A', type: 'TEXT' },
+          { key: 'a', label: 'B', type: 'TEXT' },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      createIntakeFormSchema.safeParse({
+        name: 'Company details',
+        fields: [
+          { key: 'number', label: 'Number', type: 'REFERENCE', mask: '####', prefillFrom: 'name' },
+        ],
+      }).success,
+    ).toBe(false);
   });
 });

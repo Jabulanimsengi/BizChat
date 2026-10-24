@@ -28,7 +28,7 @@ import {
   type IntegrationRequest,
 } from './integration.guard';
 import {
-  customerSchema,
+  identifySchema,
   historySchema,
   keySchema,
   pageSchema,
@@ -37,6 +37,7 @@ import {
   startSchema,
   webhookSchema,
   type HistoryInput,
+  type IdentifyInput,
   type KeyInput,
   type PageInput,
   type ResolveInput,
@@ -185,9 +186,9 @@ export class IntegrationController {
   @IntegrationScopeRequired('customers:identify')
   public identify(
     @Req() request: IntegrationRequest,
-    @Body(new ZodValidationPipe(customerSchema)) input: { externalId: string },
+    @Body(new ZodValidationPipe(identifySchema)) input: IdentifyInput,
   ): Promise<object> {
-    return this.identities.issue(request.integration, input.externalId);
+    return this.identities.issue(request.integration, input);
   }
 }
 @Controller('integrations')

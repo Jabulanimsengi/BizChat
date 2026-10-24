@@ -17,6 +17,8 @@ import type {
   ConversationOperationEvent,
   ConversationRecoveryEvent,
   ConversationRoutingEvent,
+  IntakePrompt,
+  IntakeSubmitResult,
   ConversationSessionResponse,
   MessagePage,
   MessageReceiptEvent,
@@ -28,6 +30,7 @@ import {
   conversationHistorySchema,
   conversationResumeSchema,
   conversationStartSchema,
+  intakeFormSubmitSchema,
   intakeSubmitSchema,
   messageReadSchema,
   messageReceiptSchema,
@@ -62,6 +65,10 @@ import {
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
 import { IntakeService } from '../intake/intake.service';
 import {
+  INTAKE_REQUIRED_EVENT,
+  type IntakeRequiredApplicationEvent,
+} from '../intake/intake-events';
+import {
   CONVERSATION_RECOVERY_EVENT,
   type ConversationRecoveryApplicationEvent,
 } from '../reliability/reliability-events';
@@ -82,6 +89,7 @@ interface WidgetServerEvents {
   'conversation.routed': (event: ConversationRoutingEvent) => void;
   'conversation.updated': (event: ConversationOperationEvent) => void;
   'conversation.recovery': (event: ConversationRecoveryEvent) => void;
+  'conversation.intake.required': (event: { conversationId: string; prompt: IntakePrompt }) => void;
 }
 
 interface WidgetClientEvents {
@@ -95,8 +103,9 @@ interface WidgetClientEvents {
   ) => void;
   'conversation.intake.submit': (
     input: unknown,
-    ack: SocketAcknowledger<ConversationRoutingEvent>,
+    ack: SocketAcknowledger<IntakeSubmitResult>,
   ) => void;
+  'conversation.intake.form': (input: unknown, ack: SocketAcknowledger<IntakeSubmitResult>) => void;
   'conversation.history': (input: unknown, ack: SocketAcknowledger<MessagePage>) => void;
   'message.send': (input: unknown, ack: SocketAcknowledger<MessageResponse>) => void;
   'message.delivered': (input: unknown, ack: SocketAcknowledger<MessageReceiptEvent>) => void;
@@ -222,7 +231,7 @@ export class WidgetGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const result = await this.conversations.startVisitor(client.data, parsed.data);
       await client.join(this.conversationRoom(client.data.businessId, result.conversation.id));
       await this.publishVisitorPresence(client.data, 'ONLINE');
-      // Routing waits while the visitor is asked to choose a topic.
+      // Routing waits while the visitor chooses a topic or completes the pre-chat form.
       if (result.intake?.mode === 'ASK') {
         acknowledge({ ok: true, data: result });
         return;
@@ -242,7 +251,7 @@ export class WidgetGateway implements OnGatewayConnection, OnGatewayDisconnect {
   public async submitIntake(
     @ConnectedSocket() client: WidgetSocket,
     @MessageBody() input: unknown,
-    @Ack() acknowledge: SocketAcknowledger<ConversationRoutingEvent>,
+    @Ack() acknowledge: SocketAcknowledger<IntakeSubmitResult>,
   ): Promise<void> {
     const parsed = intakeSubmitSchema.safeParse(input);
     if (!parsed.success) {
@@ -254,6 +263,35 @@ export class WidgetGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error) {
       acknowledge(this.failure(error));
     }
+  }
+
+  /** The visitor submits the pre-chat form; field problems come back as `details.fieldErrors`. */
+  @SubscribeMessage('conversation.intake.form')
+  public async submitIntakeForm(
+    @ConnectedSocket() client: WidgetSocket,
+    @MessageBody() input: unknown,
+    @Ack() acknowledge: SocketAcknowledger<IntakeSubmitResult>,
+  ): Promise<void> {
+    const parsed = intakeFormSubmitSchema.safeParse(input);
+    if (!parsed.success) {
+      acknowledge(validationFailure(parsed.error.flatten()));
+      return;
+    }
+    try {
+      acknowledge({ ok: true, data: await this.intake.submitForm(client.data, parsed.data) });
+    } catch (error) {
+      acknowledge(this.failure(error));
+    }
+  }
+
+  @OnEvent(INTAKE_REQUIRED_EVENT)
+  public intakeRequired(event: IntakeRequiredApplicationEvent): void {
+    this.server
+      .to(this.conversationRoom(event.businessId, event.conversationId))
+      .emit('conversation.intake.required', {
+        conversationId: event.conversationId,
+        prompt: event.prompt,
+      });
   }
 
   @SubscribeMessage('conversation.resume')
@@ -485,12 +523,14 @@ function socketFailure(error: unknown): SocketAck<never> {
   if (error instanceof HttpException) {
     const response = error.getResponse();
     if (typeof response === 'object' && response !== null) {
-      const body = response as { code?: unknown; message?: unknown };
+      const body = response as { code?: unknown; message?: unknown; details?: unknown };
       return {
         ok: false,
         error: {
           code: typeof body.code === 'string' ? body.code : 'REQUEST_FAILED',
           message: typeof body.message === 'string' ? body.message : 'Request failed',
+          // Field-level problems (e.g. pre-chat form answers) let the widget mark each field.
+          ...(body.details !== undefined ? { details: body.details } : {}),
         },
       };
     }

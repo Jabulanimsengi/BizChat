@@ -190,6 +190,12 @@ enum ClassificationMethod {
   TIMEOUT
 }
 
+// AFTER_TOPIC: the form depends on the topic. BEFORE_CHAT: the default form precedes the first message.
+enum IntakeFormTiming {
+  AFTER_TOPIC
+  BEFORE_CHAT
+}
+
 enum ClassificationDecision {
   ROUTE
   CONFIRM
@@ -239,6 +245,8 @@ model Business {
   conversationOffers       ConversationOffer[]
   topics                   Topic[]
   classifications          ConversationClassification[]
+  intakeForms              IntakeForm[]
+  conversationIntakes      ConversationIntake[]
 
   @@index([status])
   @@map("businesses")
@@ -456,17 +464,60 @@ model Topic {
   isDefault                   Boolean                      @default(false)
   status                      ResourceStatus               @default(ACTIVE)
   sortOrder                   Int                          @default(0)
+  // Pre-chat form asked after this topic is chosen (AFTER_TOPIC timing); null uses the default form.
+  intakeFormId                String?                      @db.Uuid
   createdAt                   DateTime                     @default(now())
   updatedAt                   DateTime                     @updatedAt
   business                    Business                     @relation(fields: [businessId], references: [id], onDelete: Restrict)
   department                  Department?                  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   requiredSkill               Skill?                       @relation(fields: [requiredSkillId], references: [id], onDelete: SetNull)
+  intakeForm                  IntakeForm?                  @relation(fields: [intakeFormId], references: [id], onDelete: SetNull)
   conversations               Conversation[]
   classifications             ConversationClassification[]
 
   @@unique([businessId, name])
   @@index([businessId, status, sortOrder])
   @@map("topics")
+}
+
+model IntakeForm {
+  id              String               @id @default(uuid()) @db.Uuid
+  businessId      String               @db.Uuid
+  name            String               @db.VarChar(100)
+  // Incremented when fields or consent change, so stored answers record what the visitor saw.
+  version         Int                  @default(1)
+  // [{ key, label, type, required, maxLength?, options?, mask?, prefillFrom? }], validated by the API.
+  fields          Json
+  consentText     String?              @db.VarChar(1000)
+  status          ResourceStatus       @default(ACTIVE)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  business        Business             @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  topics          Topic[]
+  intakes         ConversationIntake[]
+  defaultSettings RoutingSettings[]
+
+  @@unique([businessId, name])
+  @@index([businessId, status])
+  @@map("intake_forms")
+}
+
+model ConversationIntake {
+  id             String       @id @default(uuid()) @db.Uuid
+  businessId     String       @db.Uuid
+  conversationId String       @unique @db.Uuid
+  formId         String?      @db.Uuid
+  formVersion    Int
+  // [{ key, label, value }] as the visitor saw them.
+  answers        Json
+  consentAt      DateTime?
+  submittedAt    DateTime     @default(now())
+  business       Business     @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  form           IntakeForm?  @relation(fields: [formId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, submittedAt])
+  @@map("conversation_intakes")
 }
 
 model ConversationClassification {
@@ -508,21 +559,24 @@ model AgentSkill {
 }
 
 model RoutingSettings {
-  id                        String          @id @default(uuid()) @db.Uuid
-  businessId                String          @unique @db.Uuid
-  routingStrategy           RoutingStrategy @default(LEAST_BUSY)
+  id                        String           @id @default(uuid()) @db.Uuid
+  businessId                String           @unique @db.Uuid
+  routingStrategy           RoutingStrategy  @default(LEAST_BUSY)
   // Rows default to AUTO so existing tenants keep direct assignment; registration stores OFFER.
-  assignmentMode            AssignmentMode  @default(AUTO)
-  offerTimeoutSeconds       Int             @default(30)
-  missedOffersBeforeAway    Int             @default(2)
-  exclusionSeconds          Int             @default(300)
+  assignmentMode            AssignmentMode   @default(AUTO)
+  offerTimeoutSeconds       Int              @default(30)
+  missedOffersBeforeAway    Int              @default(2)
+  exclusionSeconds          Int              @default(300)
   // Classifier confidence at or above autoRouteThreshold routes; below confirmThreshold asks.
-  autoRouteThreshold        Float           @default(0.6)
-  confirmThreshold          Float           @default(0.35)
-  topicPromptTimeoutSeconds Int             @default(60)
-  createdAt                 DateTime        @default(now())
-  updatedAt                 DateTime        @updatedAt
-  business                  Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  autoRouteThreshold        Float            @default(0.6)
+  confirmThreshold          Float            @default(0.35)
+  topicPromptTimeoutSeconds Int              @default(60)
+  intakeFormTiming          IntakeFormTiming @default(AFTER_TOPIC)
+  defaultIntakeFormId       String?          @db.Uuid
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+  business                  Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  defaultIntakeForm         IntakeForm?      @relation(fields: [defaultIntakeFormId], references: [id], onDelete: SetNull)
 
   @@map("routing_settings")
 }
@@ -670,6 +724,7 @@ model Conversation {
   requiredSkill               Skill?                       @relation(fields: [requiredSkillId], references: [id], onDelete: SetNull)
   topic                       Topic?                       @relation(fields: [topicId], references: [id], onDelete: SetNull)
   classifications             ConversationClassification[]
+  intake                      ConversationIntake?
   participants                ConversationParticipant[]
   messages                    Message[]
   attachments                 Attachment[]
@@ -927,13 +982,16 @@ model IntegrationKey {
 }
 
 model IntegrationCustomer {
-  id         String   @id @default(uuid()) @db.Uuid
-  businessId String   @db.Uuid
-  externalId String   @db.VarChar(200)
-  visitorId  String   @unique @db.Uuid
-  createdAt  DateTime @default(now())
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
-  visitor    Visitor  @relation(fields: [visitorId], references: [id], onDelete: Restrict)
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @db.Uuid
+  externalId  String   @db.VarChar(200)
+  visitorId   String   @unique @db.Uuid
+  // Optional claims from the latest identity proof; pre-fill pre-chat form fields.
+  displayName String?  @db.VarChar(100)
+  email       String?  @db.VarChar(254)
+  createdAt   DateTime @default(now())
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  visitor     Visitor  @relation(fields: [visitorId], references: [id], onDelete: Restrict)
 
   @@unique([businessId, externalId])
   @@map("integration_customers")

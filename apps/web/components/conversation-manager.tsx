@@ -45,6 +45,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { API_ORIGIN, apiRequest } from '../lib/api';
+import { IntakeAnswers } from './intake-answers';
 import { OfferTray } from './offer-tray';
 import { Button } from './ui/button';
 
@@ -1168,6 +1169,7 @@ export function ConversationManager() {
                 }).format(new Date(selected.conversation.createdAt))}
               />
             </dl>
+            <IntakeAnswers conversationId={selected.conversation.id} />
             <div className="mt-6 rounded-2xl border border-line bg-white p-4">
               <div className="flex items-center gap-2">
                 <Users size={16} className="text-moss" />

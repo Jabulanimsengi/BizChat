@@ -66,6 +66,7 @@ describe('WidgetService', () => {
       prisma as unknown as PrismaService,
       config as unknown as ConfigService<Environment, true>,
       {} as CustomerIdentityService,
+      { beforeChatForm: jest.fn().mockResolvedValue(null) } as never,
     );
     const result = await service.bootstrap(
       { businessPublicId: 'pub_12345678', visitorToken },
@@ -88,6 +89,7 @@ describe('WidgetService', () => {
       prisma as unknown as PrismaService,
       config as unknown as ConfigService<Environment, true>,
       {} as CustomerIdentityService,
+      { beforeChatForm: jest.fn().mockResolvedValue(null) } as never,
     );
     await expect(
       service.bootstrap({ businessPublicId: 'pub_12345678' }, 'https://attacker.example'),

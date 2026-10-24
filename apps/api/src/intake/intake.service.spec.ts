@@ -32,10 +32,15 @@ describe('IntakeService', () => {
       'conversation' | 'conversationQueueEntry' | 'conversationClassification',
       Record<string, jest.Mock>
     >;
-    prisma: { conversation: { findFirst: jest.Mock; findMany: jest.Mock } };
+    prisma: {
+      conversation: { findFirst: jest.Mock; findMany: jest.Mock };
+      conversationIntake: { count: jest.Mock };
+    };
     catalog: { findActive: jest.Mock; quickReplies: jest.Mock };
+    forms: Record<'requirement' | 'record' | 'validate' | 'widgetForm', jest.Mock>;
     routing: { routeConversation: jest.Mock };
     timeline: { recordInTransaction: jest.Mock };
+    emit: jest.Mock;
   } => {
     const transaction = {
       conversation: { updateMany: jest.fn().mockResolvedValue({ count: changed }) },
@@ -44,14 +49,30 @@ describe('IntakeService', () => {
     };
     const prisma = {
       conversation: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'conversation-1' }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'conversation-1',
+          businessId: 'business-1',
+          visitorId: 'visitor-1',
+          topicId: 'registration',
+          intakeStatus: 'AWAITING_FORM',
+        }),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      conversationIntake: { count: jest.fn().mockResolvedValue(0) },
       department: { findFirst: jest.fn().mockResolvedValue({ id: 'default-department' }) },
       $transaction: jest.fn(async (operation: (client: typeof transaction) => Promise<unknown>) =>
         operation(transaction),
       ),
     };
+    const forms = {
+      requirement: jest.fn().mockResolvedValue(null),
+      record: jest.fn().mockResolvedValue(undefined),
+      validate: jest.fn().mockReturnValue([{ key: 'name', label: 'Name', value: 'Thandi' }]),
+      widgetForm: jest
+        .fn()
+        .mockReturnValue({ name: 'Company details', consentText: null, fields: [] }),
+    };
+    const emit = jest.fn();
     const catalog = {
       findActive: jest.fn((_businessId: string, publicId: string | null) =>
         Promise.resolve(publicId === null ? general : sales),
@@ -63,11 +84,134 @@ describe('IntakeService', () => {
     const service = new IntakeService(
       prisma as never,
       catalog as never,
+      forms as never,
       routing as never,
       timeline as never,
+      { emit } as never,
     );
-    return { service, transaction, prisma, catalog, routing, timeline };
+    return { service, transaction, prisma, catalog, forms, routing, timeline, emit };
   };
+  const form = { id: 'form-1', name: 'Company details', version: 2, consentText: null };
+
+  it('moves to the form step instead of routing when the chosen topic has a form', async () => {
+    const { service, transaction, forms, routing } = setup();
+    forms.requirement.mockResolvedValue({ form, prefill: {}, autoAnswers: null });
+
+    const result = await service.submit(identity, {
+      conversationId: 'conversation-1',
+      topicPublicId: 'topic_registration01',
+    });
+
+    expect(transaction.conversation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ intakeStatus: 'AWAITING_FORM' }) as unknown,
+      }),
+    );
+    expect(result).toEqual({
+      routed: null,
+      intake: expect.objectContaining({ step: 'FORM', mode: 'ASK' }) as unknown,
+    });
+    expect(routing.routeConversation).not.toHaveBeenCalled();
+  });
+
+  it('stores a form that identity claims already answer, then routes', async () => {
+    const { service, transaction, forms, routing } = setup();
+    const autoAnswers = [{ key: 'email', label: 'Email', value: 'thandi@example.com' }];
+    forms.requirement.mockResolvedValue({ form, prefill: {}, autoAnswers });
+
+    await service.submit(identity, {
+      conversationId: 'conversation-1',
+      topicPublicId: 'topic_registration01',
+    });
+
+    expect(transaction.conversation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ intakeStatus: 'COMPLETE' }) as unknown,
+      }),
+    );
+    expect(forms.record).toHaveBeenCalledWith(
+      transaction,
+      'business-1',
+      'conversation-1',
+      form,
+      autoAnswers,
+      false,
+    );
+    expect(routing.routeConversation).toHaveBeenCalled();
+  });
+
+  it('does not ask for a second form after one was submitted', async () => {
+    const { service, prisma, forms } = setup();
+    prisma.conversationIntake.count.mockResolvedValue(1);
+
+    await service.submit(identity, { conversationId: 'conversation-1', topicPublicId: null });
+
+    expect(forms.requirement).not.toHaveBeenCalled();
+  });
+
+  it('validates, stores, and routes a submitted form', async () => {
+    const { service, transaction, forms, routing } = setup();
+    forms.requirement.mockResolvedValue({ form, prefill: { name: 'Thandi' }, autoAnswers: null });
+
+    const result = await service.submitForm(identity, {
+      conversationId: 'conversation-1',
+      answers: { registration_number: '2019/123456/07' },
+      consent: true,
+    });
+
+    expect(forms.validate).toHaveBeenCalledWith(
+      form,
+      expect.objectContaining({ answers: { registration_number: '2019/123456/07' } }),
+      { name: 'Thandi' },
+    );
+    expect(transaction.conversation.updateMany).toHaveBeenCalledWith({
+      where: { id: 'conversation-1', businessId: 'business-1', intakeStatus: 'AWAITING_FORM' },
+      data: { intakeStatus: 'COMPLETE' },
+    });
+    expect(forms.record).toHaveBeenCalledWith(
+      transaction,
+      'business-1',
+      'conversation-1',
+      form,
+      [{ key: 'name', label: 'Name', value: 'Thandi' }],
+      true,
+    );
+    expect(routing.routeConversation).toHaveBeenCalledWith('business-1', 'conversation-1');
+    expect(result.intake).toBeNull();
+  });
+
+  it('rejects a form submission when no form is pending', async () => {
+    const { service, prisma, routing } = setup();
+    prisma.conversation.findFirst.mockResolvedValue({
+      id: 'conversation-1',
+      businessId: 'business-1',
+      intakeStatus: 'COMPLETE',
+    });
+
+    await expect(
+      service.submitForm(identity, { conversationId: 'conversation-1', answers: {} }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(routing.routeConversation).not.toHaveBeenCalled();
+  });
+
+  it('asks a still-connected visitor for the form after a topic prompt times out', async () => {
+    const { service, prisma, forms, routing, emit } = setup();
+    prisma.conversation.findMany.mockResolvedValue([
+      { id: 'conversation-1', businessId: 'business-1', visitorId: 'visitor-1' },
+    ]);
+    forms.requirement.mockResolvedValue({ form, prefill: {}, autoAnswers: null });
+
+    await service.expirePrompts();
+
+    expect(emit).toHaveBeenCalledWith(
+      'intake.required',
+      expect.objectContaining({
+        conversationId: 'conversation-1',
+        prompt: expect.objectContaining({ step: 'FORM' }) as unknown,
+      }),
+    );
+    expect(routing.routeConversation).not.toHaveBeenCalled();
+  });
 
   it("applies the visitor's choice to the conversation and its queue entry, then routes", async () => {
     const { service, transaction, routing, timeline } = setup();

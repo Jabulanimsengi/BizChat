@@ -198,7 +198,7 @@ async function main() {
       conversationId: asked.conversation.id,
       topicPublicId: registration.publicId,
     });
-    assert(chosen.ok && chosen.data.outcome === 'ASSIGNED', 'chosen topic did not route');
+    assert(chosen.ok && chosen.data.routed?.outcome === 'ASSIGNED', 'chosen topic did not route');
     const chosenState = await stateOf(asked.conversation.id);
     assert(
       chosenState.topicId === registration.id &&
