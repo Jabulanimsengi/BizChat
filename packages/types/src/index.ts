@@ -70,7 +70,29 @@ export interface BusinessUserResponse {
   maxConcurrentChats: number;
   routingEnabled: boolean;
   departmentIds: string[];
+  skills: AgentSkillResponse[];
   createdAt: string;
+}
+
+export interface SkillResponse {
+  id: string;
+  name: string;
+  description: string | null;
+  status: 'ACTIVE' | 'DISABLED';
+  consultantCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A consultant's skill with proficiency from 1 (basic) to 5 (expert). */
+export interface AgentSkillResponse {
+  skillId: string;
+  proficiency: number;
+}
+
+export type RoutingStrategy = 'LEAST_BUSY' | 'BEST_SKILL';
+export interface RoutingSettingsResponse {
+  routingStrategy: RoutingStrategy;
 }
 
 export interface AuditLogResponse {

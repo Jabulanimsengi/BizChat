@@ -44,6 +44,37 @@ import {
 } from './routing-events';
 
 type CandidateProfile = AgentProfile & { membership: { status: string }; user: { status: string } };
+interface SkillRequirement {
+  skillId: string;
+  minProficiency: number;
+}
+
+/** Durable eligibility; presence and capacity are checked separately. */
+function eligibleProfileWhere(
+  conversation: Conversation,
+  requirement: SkillRequirement | null,
+): Prisma.AgentProfileWhereInput {
+  return {
+    businessId: conversation.businessId,
+    status: 'ACTIVE',
+    routingEnabled: true,
+    membership: { status: 'ACTIVE' },
+    user: { status: 'ACTIVE' },
+    ...(conversation.departmentId
+      ? { departments: { some: { departmentId: conversation.departmentId } } }
+      : {}),
+    ...(requirement
+      ? {
+          skills: {
+            some: {
+              skillId: requirement.skillId,
+              proficiency: { gte: requirement.minProficiency },
+            },
+          },
+        }
+      : {}),
+  };
+}
 
 const DRAIN_BATCH_SIZE = 200;
 const DRAIN_LOCK_TTL_MS = 30_000;
@@ -149,15 +180,22 @@ export class ConversationRoutingService {
           select: { agentProfile: { select: { membershipId: true } } },
         })
       : null;
-    const candidates = await this.eligibleCandidates(conversation);
+    const routing = await this.prisma.routingSettings.findUnique({
+      where: { businessId },
+      select: { routingStrategy: true },
+    });
+    const requirement = await this.skillRequirement(conversation);
+    const candidates = await this.eligibleCandidates(conversation, requirement);
     for (const candidate of orderCandidates(
       candidates,
       previous?.assignedAgentMembershipId ?? previousAssignment?.agentProfile.membershipId ?? null,
+      routing?.routingStrategy ?? 'LEAST_BUSY',
     )) {
       const assigned = await this.tryClaim(
         conversation,
         candidate,
         options.assignmentType ?? 'AUTO',
+        requirement,
       );
       if (assigned) {
         if (assigned.timeline.message)
@@ -244,17 +282,25 @@ export class ConversationRoutingService {
       // The priority enum is declared LOW..URGENT, so PostgreSQL sorts it by urgency.
       orderBy: [{ priority: 'desc' }, { enqueuedAt: 'asc' }, { id: 'asc' }],
       take: DRAIN_BATCH_SIZE,
+      include: {
+        conversation: { select: { requiredSkillId: true, requiredSkillMinProficiency: true } },
+      },
     });
     const scopes = new DrainScopeTracker();
     let assigned = 0;
     for (const entry of orderQueue(entries)) {
-      if (!scopes.shouldAttempt(entry.departmentId)) continue;
+      const scope = {
+        departmentId: entry.departmentId,
+        skillId: entry.conversation.requiredSkillId,
+        minProficiency: entry.conversation.requiredSkillMinProficiency ?? 1,
+      };
+      if (!scopes.shouldAttempt(scope)) continue;
       const result = await this.routeConversation(businessId, entry.conversationId);
       if (result.outcome === 'ASSIGNED') {
         assigned += 1;
         scopes.recordAssigned(entry.departmentId);
       } else if (result.conversation.status === 'QUEUED') {
-        scopes.recordExhausted(entry.departmentId);
+        scopes.recordExhausted(scope);
       }
     }
     await this.publishQueuePositions(businessId, scopes.changedDepartments());
@@ -331,21 +377,40 @@ export class ConversationRoutingService {
     return outcome.conversation;
   }
 
-  private async eligibleCandidates(
-    conversation: Conversation,
-  ): Promise<(CandidateProfile & { activeChats: number })[]> {
-    const profiles = await this.prisma.agentProfile.findMany({
+  /**
+   * The skill a conversation needs, or null. A requirement on a disabled skill is ignored so that
+   * disabling a skill can never strand queued conversations.
+   */
+  private async skillRequirement(conversation: Conversation): Promise<SkillRequirement | null> {
+    if (!conversation.requiredSkillId) return null;
+    const skill = await this.prisma.skill.findFirst({
       where: {
+        id: conversation.requiredSkillId,
         businessId: conversation.businessId,
         status: 'ACTIVE',
-        routingEnabled: true,
-        membership: { status: 'ACTIVE' },
-        user: { status: 'ACTIVE' },
-        ...(conversation.departmentId
-          ? { departments: { some: { departmentId: conversation.departmentId } } }
-          : {}),
       },
-      include: { membership: { select: { status: true } }, user: { select: { status: true } } },
+      select: { id: true },
+    });
+    return skill
+      ? { skillId: skill.id, minProficiency: conversation.requiredSkillMinProficiency ?? 1 }
+      : null;
+  }
+
+  private async eligibleCandidates(
+    conversation: Conversation,
+    requirement: SkillRequirement | null,
+  ): Promise<(CandidateProfile & { activeChats: number; proficiency?: number })[]> {
+    const profiles = await this.prisma.agentProfile.findMany({
+      where: eligibleProfileWhere(conversation, requirement),
+      include: {
+        membership: { select: { status: true } },
+        user: { select: { status: true } },
+        skills: {
+          ...(requirement ? { where: { skillId: requirement.skillId } } : {}),
+          select: { proficiency: true },
+          take: requirement ? 1 : 0,
+        },
+      },
     });
     const evaluated = await Promise.all(
       profiles.map(async (profile) => ({
@@ -359,13 +424,18 @@ export class ConversationRoutingService {
         ({ profile, presence, activeChats }) =>
           presence === 'ONLINE' && activeChats < profile.maxConcurrentChats,
       )
-      .map(({ profile, activeChats }) => ({ ...profile, activeChats }));
+      .map(({ profile: { skills, ...profile }, activeChats }) => ({
+        ...profile,
+        activeChats,
+        ...(requirement ? { proficiency: skills[0]?.proficiency ?? 0 } : {}),
+      }));
   }
 
   private async tryClaim(
     conversation: Conversation,
     candidate: CandidateProfile,
     assignmentType: AssignmentType,
+    requirement: SkillRequirement | null,
   ): Promise<{
     conversation: Conversation;
     timeline: {
@@ -377,17 +447,7 @@ export class ConversationRoutingService {
       const lockKey = `routing-capacity:${conversation.businessId}:${candidate.id}`;
       await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) IS NULL AS acquired`;
       const currentCandidate = await transaction.agentProfile.findFirst({
-        where: {
-          id: candidate.id,
-          businessId: conversation.businessId,
-          status: 'ACTIVE',
-          routingEnabled: true,
-          membership: { status: 'ACTIVE' },
-          user: { status: 'ACTIVE' },
-          ...(conversation.departmentId
-            ? { departments: { some: { departmentId: conversation.departmentId } } }
-            : {}),
-        },
+        where: { id: candidate.id, ...eligibleProfileWhere(conversation, requirement) },
         include: { user: { select: { displayName: true } } },
       });
       if (

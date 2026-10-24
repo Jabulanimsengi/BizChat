@@ -20,6 +20,7 @@ import { WidgetModule } from './widget/widget.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { AgentModule } from './agents/agent.module';
 import { DepartmentModule } from './departments/department.module';
+import { RoutingConfigModule } from './routing-config/routing-config.module';
 import { RoutingModule } from './routing/routing.module';
 import { ConversationToolsModule } from './conversation-tools/conversation-tools.module';
 import { BusinessHoursModule } from './business-hours/business-hours.module';
@@ -56,6 +57,7 @@ import { RedisService } from './realtime/redis.service';
     MetricsModule,
     AgentModule,
     DepartmentModule,
+    RoutingConfigModule,
     RoutingModule,
     ConversationToolsModule,
     BusinessHoursModule,

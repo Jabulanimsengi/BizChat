@@ -154,6 +154,11 @@ enum ResourceStatus {
   DISABLED
 }
 
+enum RoutingStrategy {
+  LEAST_BUSY
+  BEST_SKILL
+}
+
 model Business {
   id                       String                   @id @default(uuid()) @db.Uuid
   name                     String                   @db.VarChar(120)
@@ -189,6 +194,9 @@ model Business {
   integrationCustomers     IntegrationCustomer[]
   integrationRequests      IntegrationRequest[]
   webhookEndpoints         WebhookEndpoint[]
+  skills                   Skill[]
+  agentSkills              AgentSkill[]
+  routingSettings          RoutingSettings?
 
   @@index([status])
   @@map("businesses")
@@ -360,10 +368,57 @@ model AgentProfile {
   membership         BusinessMembership       @relation(fields: [membershipId], references: [id], onDelete: Cascade)
   departments        AgentDepartment[]
   assignments        ConversationAssignment[]
+  skills             AgentSkill[]
 
   @@unique([businessId, userId])
   @@index([businessId, status, routingEnabled])
   @@map("agent_profiles")
+}
+
+model Skill {
+  id            String         @id @default(uuid()) @db.Uuid
+  businessId    String         @db.Uuid
+  name          String         @db.VarChar(80)
+  description   String?        @db.VarChar(240)
+  status        ResourceStatus @default(ACTIVE)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  agents        AgentSkill[]
+  conversations Conversation[]
+
+  @@unique([businessId, name])
+  @@index([businessId, status, name])
+  @@map("skills")
+}
+
+// Proficiency is 1-5, enforced by a database check constraint.
+model AgentSkill {
+  id             String       @id @default(uuid()) @db.Uuid
+  businessId     String       @db.Uuid
+  agentProfileId String       @db.Uuid
+  skillId        String       @db.Uuid
+  proficiency    Int
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  business       Business     @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  agentProfile   AgentProfile @relation(fields: [agentProfileId], references: [id], onDelete: Cascade)
+  skill          Skill        @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([agentProfileId, skillId])
+  @@index([businessId, skillId, proficiency])
+  @@map("agent_skills")
+}
+
+model RoutingSettings {
+  id              String          @id @default(uuid()) @db.Uuid
+  businessId      String          @unique @db.Uuid
+  routingStrategy RoutingStrategy @default(LEAST_BUSY)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  business        Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("routing_settings")
 }
 
 model Department {
@@ -468,46 +523,52 @@ model AuditLog {
 }
 
 model Conversation {
-  id                        String                    @id @default(uuid()) @db.Uuid
-  businessId                String                    @db.Uuid
-  visitorId                 String?                   @db.Uuid
-  customerId                String?                   @db.Uuid
-  departmentId              String?                   @db.Uuid
-  assignedAgentMembershipId String?                   @db.Uuid
-  status                    ConversationStatus        @default(NEW)
-  priority                  ConversationPriority      @default(NORMAL)
-  source                    ConversationSource        @default(WEB_WIDGET)
-  subject                   String?                   @db.VarChar(240)
-  nextSequence              BigInt                    @default(0)
-  createdAt                 DateTime                  @default(now())
-  updatedAt                 DateTime                  @updatedAt
-  assignedAt                DateTime?
-  firstResponseAt           DateTime?
-  resolvedAt                DateTime?
-  reopenedAt                DateTime?
-  agentDisconnectedAt       DateTime?
-  reassignmentDueAt         DateTime?
-  reassignmentAttempts      Int                       @default(0)
-  reassignmentLastError     String?                   @db.VarChar(500)
-  closedAt                  DateTime?
-  lastMessageAt             DateTime?
-  business                  Business                  @relation(fields: [businessId], references: [id], onDelete: Restrict)
-  visitor                   Visitor?                  @relation(fields: [visitorId], references: [id], onDelete: Restrict)
-  assignedAgent             BusinessMembership?       @relation("AssignedAgent", fields: [assignedAgentMembershipId], references: [id], onDelete: SetNull)
-  department                Department?               @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  participants              ConversationParticipant[]
-  messages                  Message[]
-  attachments               Attachment[]
-  assignments               ConversationAssignment[]
-  queueEntry                ConversationQueueEntry?
-  events                    ConversationEvent[]
-  tags                      ConversationTag[]
+  id                          String                    @id @default(uuid()) @db.Uuid
+  businessId                  String                    @db.Uuid
+  visitorId                   String?                   @db.Uuid
+  customerId                  String?                   @db.Uuid
+  departmentId                String?                   @db.Uuid
+  assignedAgentMembershipId   String?                   @db.Uuid
+  // Set by topics (Phase B3); routing then requires this skill at the minimum proficiency (1-5).
+  requiredSkillId             String?                   @db.Uuid
+  requiredSkillMinProficiency Int?
+  status                      ConversationStatus        @default(NEW)
+  priority                    ConversationPriority      @default(NORMAL)
+  source                      ConversationSource        @default(WEB_WIDGET)
+  subject                     String?                   @db.VarChar(240)
+  nextSequence                BigInt                    @default(0)
+  createdAt                   DateTime                  @default(now())
+  updatedAt                   DateTime                  @updatedAt
+  assignedAt                  DateTime?
+  firstResponseAt             DateTime?
+  resolvedAt                  DateTime?
+  reopenedAt                  DateTime?
+  agentDisconnectedAt         DateTime?
+  reassignmentDueAt           DateTime?
+  reassignmentAttempts        Int                       @default(0)
+  reassignmentLastError       String?                   @db.VarChar(500)
+  closedAt                    DateTime?
+  lastMessageAt               DateTime?
+  business                    Business                  @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  visitor                     Visitor?                  @relation(fields: [visitorId], references: [id], onDelete: Restrict)
+  assignedAgent               BusinessMembership?       @relation("AssignedAgent", fields: [assignedAgentMembershipId], references: [id], onDelete: SetNull)
+  department                  Department?               @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  requiredSkill               Skill?                    @relation(fields: [requiredSkillId], references: [id], onDelete: SetNull)
+  participants                ConversationParticipant[]
+  messages                    Message[]
+  attachments                 Attachment[]
+  assignments                 ConversationAssignment[]
+  queueEntry                  ConversationQueueEntry?
+  events                      ConversationEvent[]
+  tags                        ConversationTag[]
 
   @@index([businessId, status, lastMessageAt])
   @@index([businessId, visitorId, status])
   @@index([businessId, assignedAgentMembershipId, status])
   @@index([businessId, departmentId, status])
   @@index([businessId, reassignmentDueAt, status])
+  // Cross-tenant sweep scans (unrouted and abandoned conversations).
+  @@index([status, createdAt])
   @@map("conversations")
 }
 

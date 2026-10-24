@@ -242,3 +242,25 @@ Verification: format, lint, and type checks pass in every workspace; 136 API uni
 gate passed, 29.53% statements), 10 dashboard, 5 widget, and 14 validation tests pass. Against the
 Docker test stack, all 16 HTTP integration tests and the end-to-end suite (Phases 3-7 and 9,
 including the two-node Phase 7) pass. Load targets and production deployment were not exercised.
+
+## Phase B1 - Skills and routing settings — 2026-10-24
+
+- Tenant skill catalogue (`skills`) and consultant proficiency 1-5 (`agent_skills`, enforced by a
+  database check), managed on **Dashboard → Routing** and **Dashboard → Users**, with audit records.
+- Per-tenant `routing_settings` with `routingStrategy`: `LEAST_BUSY` (default; load, then
+  proficiency) or `BEST_SKILL` (proficiency, then load). The previous consultant stays first.
+- Conversations can carry `requiredSkillId` and `requiredSkillMinProficiency`. Routing then offers
+  them only to consultants with that skill at that level, re-checked inside the claim transaction. A
+  requirement on a disabled skill is ignored. Topics (B3) will set these fields; until then routing
+  outcomes are unchanged.
+- Queue drains track exhaustion by eligibility scope (department, skill, minimum proficiency), so a
+  skill shortage no longer blocks looser requirements in the same pass.
+- Migration `20261024090000_phase_b1_skills` is additive and also adds the `conversations
+(status, createdAt)` index for the sweep scans Phase A introduced.
+
+Verification: format, lint, and type checks pass in every workspace; 150 API unit tests (coverage
+gate passed, 31.76% statements), 10 dashboard, 5 widget, and 17 validation tests pass. Against the
+Docker test stack, all 13 migrations apply to an empty database, all 19 HTTP integration tests pass
+(including the new tenant-isolation tests for skills and routing settings), and the end-to-end suite
+(Phases 3-7 and 9, including two nodes) passes. The dashboard pages were type-checked but not
+exercised in a browser.

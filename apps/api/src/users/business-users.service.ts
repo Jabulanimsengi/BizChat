@@ -12,6 +12,11 @@ import { AuditService } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 
+const agentProfileInclude = {
+  departments: { select: { departmentId: true } },
+  skills: { select: { skillId: true, proficiency: true }, orderBy: { createdAt: 'asc' } },
+} as const;
+
 @Injectable()
 export class BusinessUsersService {
   public constructor(
@@ -24,7 +29,7 @@ export class BusinessUsersService {
       where: { businessId },
       include: {
         user: true,
-        agentProfile: { include: { departments: { select: { departmentId: true } } } },
+        agentProfile: { include: agentProfileInclude },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -64,7 +69,7 @@ export class BusinessUsersService {
           where: { id: created.id },
           include: {
             user: true,
-            agentProfile: { include: { departments: { select: { departmentId: true } } } },
+            agentProfile: { include: agentProfileInclude },
           },
         });
       });
@@ -126,6 +131,7 @@ export class BusinessUsersService {
         });
     }
     if (input.departmentIds) await this.validateDepartments(auth.business.id, input.departmentIds);
+    if (input.skills) await this.validateSkills(auth.business.id, input.skills);
     const updated = await this.prisma.$transaction(async (transaction) => {
       if (input.displayName)
         await transaction.user.update({
@@ -162,6 +168,20 @@ export class BusinessUsersService {
             })),
           });
       }
+      if (input.skills) {
+        await transaction.agentSkill.deleteMany({
+          where: { businessId: auth.business.id, agentProfileId: existing.agentProfile!.id },
+        });
+        if (input.skills.length)
+          await transaction.agentSkill.createMany({
+            data: input.skills.map(({ skillId, proficiency }) => ({
+              businessId: auth.business.id,
+              agentProfileId: existing.agentProfile!.id,
+              skillId,
+              proficiency,
+            })),
+          });
+      }
       if (input.status === 'DISABLED')
         await transaction.session.updateMany({
           where: { membershipId: existing.id, revokedAt: null },
@@ -171,7 +191,7 @@ export class BusinessUsersService {
         where: { id: existing.id },
         include: {
           user: true,
-          agentProfile: { include: { departments: { select: { departmentId: true } } } },
+          agentProfile: { include: agentProfileInclude },
         },
       });
     });
@@ -200,6 +220,18 @@ export class BusinessUsersService {
       });
   }
 
+  private async validateSkills(businessId: string, skills: { skillId: string }[]): Promise<void> {
+    if (!skills.length) return;
+    const count = await this.prisma.skill.count({
+      where: { businessId, id: { in: skills.map(({ skillId }) => skillId) }, status: 'ACTIVE' },
+    });
+    if (count !== skills.length)
+      throw new NotFoundException({
+        code: 'SKILL_NOT_FOUND',
+        message: 'One or more skills do not exist',
+      });
+  }
+
   private serialize(membership: {
     id: string;
     userId: string;
@@ -212,6 +244,7 @@ export class BusinessUsersService {
       maxConcurrentChats: number;
       routingEnabled: boolean;
       departments: { departmentId: string }[];
+      skills: { skillId: string; proficiency: number }[];
     } | null;
   }): BusinessUserResponse {
     if (!membership.agentProfile)
@@ -228,6 +261,10 @@ export class BusinessUsersService {
       maxConcurrentChats: membership.agentProfile.maxConcurrentChats,
       routingEnabled: membership.agentProfile.routingEnabled,
       departmentIds: membership.agentProfile.departments.map(({ departmentId }) => departmentId),
+      skills: membership.agentProfile.skills.map(({ skillId, proficiency }) => ({
+        skillId,
+        proficiency,
+      })),
       createdAt: membership.createdAt.toISOString(),
     };
   }

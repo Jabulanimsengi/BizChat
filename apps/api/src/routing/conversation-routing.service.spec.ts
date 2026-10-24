@@ -8,6 +8,7 @@ interface QueueEntryFixture {
   departmentId: string | null;
   priority: 'NORMAL' | 'URGENT';
   enqueuedAt: Date;
+  conversation: { requiredSkillId: string | null; requiredSkillMinProficiency: number | null };
 }
 type RedisMock = Record<'set' | 'del' | 'eval' | 'exists', jest.Mock>;
 
@@ -19,6 +20,7 @@ describe('ConversationRoutingService', () => {
     departmentId: string | null,
     minute = 0,
     priority: 'NORMAL' | 'URGENT' = 'NORMAL',
+    skill: { id: string; min: number } | null = null,
   ): QueueEntryFixture => ({
     id: `entry-${id}`,
     businessId: 'business-1',
@@ -26,6 +28,10 @@ describe('ConversationRoutingService', () => {
     departmentId,
     priority,
     enqueuedAt: new Date(Date.UTC(2026, 9, 22, 8, minute)),
+    conversation: {
+      requiredSkillId: skill?.id ?? null,
+      requiredSkillMinProficiency: skill?.min ?? null,
+    },
   });
 
   const conversationRow = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -281,5 +287,120 @@ describe('ConversationRoutingService', () => {
     await expect(service.abandonDepartedVisitors()).resolves.toBe(0);
     expect(transaction.conversationQueueEntry.updateMany).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('keeps trying other skill levels after a skill scope runs out of consultants', async () => {
+    const tax3 = { id: 'tax', min: 3 };
+    const prisma = {
+      conversationQueueEntry: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            queueEntry('tax-3', 'sales', 1, 'NORMAL', tax3),
+            queueEntry('tax-4', 'sales', 2, 'NORMAL', { id: 'tax', min: 4 }),
+            queueEntry('tax-1', 'sales', 3, 'NORMAL', { id: 'tax', min: 1 }),
+          ]),
+      },
+      conversation: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = createService(prisma, lockingRedis());
+    const route = jest
+      .spyOn(service, 'routeConversation')
+      .mockResolvedValueOnce({ outcome: 'QUEUED', conversation: { status: 'QUEUED' } } as never)
+      .mockResolvedValueOnce({
+        outcome: 'ASSIGNED',
+        conversation: { status: 'ASSIGNED' },
+      } as never);
+
+    await service.drainBusinessQueue('business-1');
+
+    // tax-4 is stricter than the exhausted tax-3 scope; tax-1 is looser and may still find someone.
+    expect(route.mock.calls.map(([, id]) => id)).toEqual(['tax-3', 'tax-1']);
+  });
+
+  describe('skill-based eligibility', () => {
+    const businessId = 'business-1';
+    const profile = (id: string, proficiency: number): Record<string, unknown> => ({
+      id,
+      businessId,
+      membershipId: `membership-${id}`,
+      userId: `user-${id}`,
+      maxConcurrentChats: 5,
+      lastAssignedAt: null,
+      skills: [{ proficiency }],
+    });
+    const setup = (
+      skillActive: boolean,
+      strategy: 'LEAST_BUSY' | 'BEST_SKILL',
+    ): {
+      service: ConversationRoutingService;
+      findProfiles: jest.Mock;
+      tryClaim: jest.Mock;
+    } => {
+      const findProfiles = jest
+        .fn()
+        .mockResolvedValue([profile('competent', 3), profile('expert', 5)]);
+      const prisma = {
+        conversation: {
+          findFirst: jest.fn().mockResolvedValue({
+            ...conversationRow({ status: 'NEW', visitorId: null, departmentId: null }),
+            requiredSkillId: 'skill-tax',
+            requiredSkillMinProficiency: 3,
+          }),
+          count: jest.fn().mockResolvedValue(0),
+        },
+        widgetSettings: { findUnique: jest.fn().mockResolvedValue(null) },
+        routingSettings: { findUnique: jest.fn().mockResolvedValue({ routingStrategy: strategy }) },
+        skill: { findFirst: jest.fn().mockResolvedValue(skillActive ? { id: 'skill-tax' } : null) },
+        agentProfile: { findMany: findProfiles },
+      };
+      const service = new ConversationRoutingService(
+        prisma as never,
+        { getAgentState: jest.fn().mockResolvedValue('ONLINE') } as never,
+        { emit: jest.fn() } as never,
+        {} as never,
+        lockingRedis() as never,
+        config as never,
+      );
+      const internals = service as unknown as { tryClaim: jest.Mock; queue: jest.Mock };
+      internals.tryClaim = jest.fn().mockResolvedValue(null);
+      internals.queue = jest.fn().mockResolvedValue({ outcome: 'QUEUED' });
+      return { service, findProfiles, tryClaim: internals.tryClaim };
+    };
+
+    it('requires the skill at the minimum proficiency and tries the best match first', async () => {
+      const { service, findProfiles, tryClaim } = setup(true, 'BEST_SKILL');
+
+      await service.routeConversation(businessId, 'conversation-1');
+
+      expect(findProfiles).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            skills: { some: { skillId: 'skill-tax', proficiency: { gte: 3 } } },
+          }) as unknown,
+        }),
+      );
+      const requirement = { skillId: 'skill-tax', minProficiency: 3 };
+      expect(tryClaim.mock.calls.map(([, candidate]) => (candidate as { id: string }).id)).toEqual([
+        'expert',
+        'competent',
+      ]);
+      expect(tryClaim).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: 'expert', proficiency: 5 }),
+        'AUTO',
+        requirement,
+      );
+    });
+
+    it('ignores a requirement on a disabled skill so the conversation can still route', async () => {
+      const { service, findProfiles, tryClaim } = setup(false, 'LEAST_BUSY');
+
+      await service.routeConversation(businessId, 'conversation-1');
+
+      const where = (findProfiles.mock.calls[0] as [{ where: Record<string, unknown> }])[0].where;
+      expect(where).not.toHaveProperty('skills');
+      expect(tryClaim).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'AUTO', null);
+    });
   });
 });

@@ -155,6 +155,31 @@ export const updateAgentDepartmentsSchema = z.object({
   departmentIds: z.array(z.string().uuid()).max(100),
 });
 
+export const createSkillSchema = z
+  .object({
+    name: z.string().trim().min(2).max(80),
+    description: z.string().trim().max(240).nullable().optional(),
+  })
+  .strict();
+
+export const updateSkillSchema = z
+  .object({
+    name: z.string().trim().min(2).max(80).optional(),
+    description: z.string().trim().max(240).nullable().optional(),
+    status: z.enum(['ACTIVE', 'DISABLED']).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+
+export const agentSkillSchema = z.object({
+  skillId: z.string().uuid(),
+  proficiency: z.number().int().min(1).max(5),
+});
+
+export const updateRoutingSettingsSchema = z
+  .object({ routingStrategy: z.enum(['LEAST_BUSY', 'BEST_SKILL']) })
+  .strict();
+
 const timeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 export const updateBusinessHoursSchema = z.object({
   hours: z
@@ -205,6 +230,14 @@ export const updateBusinessUserSchema = z
     maxConcurrentChats: z.number().int().min(1).max(50).optional(),
     routingEnabled: z.boolean().optional(),
     departmentIds: z.array(z.string().uuid()).max(100).optional(),
+    skills: z
+      .array(agentSkillSchema)
+      .max(50)
+      .refine(
+        (skills) => new Set(skills.map(({ skillId }) => skillId)).size === skills.length,
+        'Each skill can be listed once',
+      )
+      .optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
@@ -395,6 +428,10 @@ export type ConversationStartInput = z.infer<typeof conversationStartSchema>;
 export type CreateDepartmentInput = z.infer<typeof createDepartmentSchema>;
 export type UpdateDepartmentInput = z.infer<typeof updateDepartmentSchema>;
 export type UpdateAgentDepartmentsInput = z.infer<typeof updateAgentDepartmentsSchema>;
+export type CreateSkillInput = z.infer<typeof createSkillSchema>;
+export type UpdateSkillInput = z.infer<typeof updateSkillSchema>;
+export type AgentSkillInput = z.infer<typeof agentSkillSchema>;
+export type UpdateRoutingSettingsInput = z.infer<typeof updateRoutingSettingsSchema>;
 export type UpdateBusinessHoursInput = z.infer<typeof updateBusinessHoursSchema>;
 export type CreateBusinessUserInput = z.infer<typeof createBusinessUserSchema>;
 export type UpdateBusinessUserInput = z.infer<typeof updateBusinessUserSchema>;

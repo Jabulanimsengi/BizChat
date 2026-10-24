@@ -22,7 +22,47 @@ import {
   createBusinessUserSchema,
   auditLogQuerySchema,
   widgetBootstrapSchema,
+  createSkillSchema,
+  updateBusinessUserSchema,
+  updateRoutingSettingsSchema,
 } from './index';
+
+describe('skill routing validation', () => {
+  const skillId = '7d3c1c8e-5b1f-4c1a-9a43-2f7f5b1c9e10';
+
+  it('accepts consultant proficiency from 1 to 5 only', () => {
+    expect(
+      updateBusinessUserSchema.safeParse({ skills: [{ skillId, proficiency: 5 }] }).success,
+    ).toBe(true);
+    expect(
+      updateBusinessUserSchema.safeParse({ skills: [{ skillId, proficiency: 0 }] }).success,
+    ).toBe(false);
+    expect(
+      updateBusinessUserSchema.safeParse({ skills: [{ skillId, proficiency: 6 }] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects listing the same skill twice for a consultant', () => {
+    const result = updateBusinessUserSchema.safeParse({
+      skills: [
+        { skillId, proficiency: 2 },
+        { skillId, proficiency: 4 },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('validates skill names and routing strategies', () => {
+    expect(createSkillSchema.safeParse({ name: ' Tax returns ' }).data?.name).toBe('Tax returns');
+    expect(createSkillSchema.safeParse({ name: 'T' }).success).toBe(false);
+    expect(updateRoutingSettingsSchema.safeParse({ routingStrategy: 'BEST_SKILL' }).success).toBe(
+      true,
+    );
+    expect(updateRoutingSettingsSchema.safeParse({ routingStrategy: 'RANDOM' }).success).toBe(
+      false,
+    );
+  });
+});
 
 describe('authentication validation', () => {
   it('normalizes email addresses during registration', () => {
