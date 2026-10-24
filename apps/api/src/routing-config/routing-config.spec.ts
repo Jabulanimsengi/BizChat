@@ -74,6 +74,9 @@ describe('routing configuration', () => {
       offerTimeoutSeconds: 30,
       missedOffersBeforeAway: 2,
       exclusionSeconds: 300,
+      autoRouteThreshold: 0.6,
+      confirmThreshold: 0.35,
+      topicPromptTimeoutSeconds: 60,
     });
   });
 
@@ -100,6 +103,9 @@ describe('routing configuration', () => {
           offerTimeoutSeconds: 30,
           missedOffersBeforeAway: 2,
           exclusionSeconds: 300,
+          autoRouteThreshold: 0.6,
+          confirmThreshold: 0.35,
+          topicPromptTimeoutSeconds: 60,
         },
       }),
     );

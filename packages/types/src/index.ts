@@ -99,6 +99,65 @@ export interface RoutingSettingsResponse {
   /** Consecutive missed offers before a consultant is set away; 0 disables. */
   missedOffersBeforeAway: number;
   exclusionSeconds: number;
+  /** Classifier confidence at or above this routes without asking the visitor. */
+  autoRouteThreshold: number;
+  /** Below this the visitor is asked to choose a topic; in between they may change it. */
+  confirmThreshold: number;
+  topicPromptTimeoutSeconds: number;
+}
+
+export type IntakeStatus = 'NOT_REQUIRED' | 'AWAITING_TOPIC' | 'AWAITING_FORM' | 'COMPLETE';
+export type ClassificationDecision = 'ROUTE' | 'CONFIRM' | 'ASK';
+
+export interface TopicKeyword {
+  phrase: string;
+  /** 1-5; defaults to 1 for a word and 2 for a phrase of several words. */
+  weight?: number;
+}
+
+export interface TopicResponse {
+  id: string;
+  publicId: string;
+  name: string;
+  description: string | null;
+  departmentId: string | null;
+  requiredSkillId: string | null;
+  requiredSkillMinProficiency: number | null;
+  priority: ConversationPriority;
+  keywords: TopicKeyword[];
+  negativeKeywords: string[];
+  examples: string[];
+  showAsQuickReply: boolean;
+  isDefault: boolean;
+  status: 'ACTIVE' | 'DISABLED';
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TopicTestResponse {
+  decision: ClassificationDecision;
+  confidence: number;
+  topic: { id: string; name: string } | null;
+  candidates: { topicId: string; name: string; score: number }[];
+}
+
+/** A topic a visitor can pick in the widget. */
+export interface WidgetTopic {
+  publicId: string;
+  name: string;
+}
+
+/**
+ * Sent with the conversation when the visitor should pick a topic (`ASK`, routing waits) or may
+ * change the one chosen for them (`CONFIRM`, already routing).
+ */
+export interface IntakePrompt {
+  step: 'TOPIC';
+  mode: 'ASK' | 'CONFIRM';
+  topics: WidgetTopic[];
+  selectedTopic: WidgetTopic | null;
+  expiresAt: string | null;
 }
 
 /** A conversation offered to one consultant, who must accept before `expiresAt`. */
@@ -154,6 +213,8 @@ export interface WidgetBootstrapResponse {
   availability: 'UNKNOWN' | 'ONLINE' | 'OFFLINE';
   config: WidgetPublicConfig;
   departments: WidgetDepartment[];
+  /** Topics offered as buttons before the first message; empty when the tenant has none. */
+  topics: WidgetTopic[];
 }
 
 export interface WidgetDepartment {
@@ -228,6 +289,8 @@ export interface ConversationResponse {
   assignedAgentMembershipId: string | null;
   departmentId: string | null;
   departmentName: string | null;
+  topicId: string | null;
+  intakeStatus: IntakeStatus;
   queuedAt: string | null;
   queuePosition: number | null;
   resolvedAt: string | null;
@@ -310,7 +373,8 @@ export type ConversationEventType =
   | 'AGENT_LEFT'
   | 'TAGS_CHANGED'
   | 'INTERNAL_NOTE_ADDED'
-  | 'OFFERED';
+  | 'OFFERED'
+  | 'TOPIC_SET';
 
 export interface ConversationEventResponse {
   id: string;
@@ -397,6 +461,7 @@ export interface ConversationSessionResponse {
   conversation: ConversationResponse;
   message?: MessageResponse;
   history: MessagePage;
+  intake?: IntakePrompt;
 }
 
 export type SocketAck<T> =

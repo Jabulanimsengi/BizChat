@@ -28,6 +28,7 @@ import {
   conversationHistorySchema,
   conversationResumeSchema,
   conversationStartSchema,
+  intakeSubmitSchema,
   messageReadSchema,
   messageReceiptSchema,
   messageSendSchema,
@@ -59,6 +60,7 @@ import {
   type ConversationRoutedApplicationEvent,
 } from '../routing/routing-events';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
+import { IntakeService } from '../intake/intake.service';
 import {
   CONVERSATION_RECOVERY_EVENT,
   type ConversationRecoveryApplicationEvent,
@@ -90,6 +92,10 @@ interface WidgetClientEvents {
   'conversation.resume': (
     input: unknown,
     ack: SocketAcknowledger<ConversationSessionResponse>,
+  ) => void;
+  'conversation.intake.submit': (
+    input: unknown,
+    ack: SocketAcknowledger<ConversationRoutingEvent>,
   ) => void;
   'conversation.history': (input: unknown, ack: SocketAcknowledger<MessagePage>) => void;
   'message.send': (input: unknown, ack: SocketAcknowledger<MessageResponse>) => void;
@@ -130,6 +136,7 @@ export class WidgetGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly profiles: AgentProfileService,
     private readonly events: EventEmitter2,
     private readonly routing: ConversationRoutingService,
+    private readonly intake: IntakeService,
   ) {}
 
   public async handleConnection(client: WidgetSocket): Promise<void> {
@@ -215,11 +222,35 @@ export class WidgetGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const result = await this.conversations.startVisitor(client.data, parsed.data);
       await client.join(this.conversationRoom(client.data.businessId, result.conversation.id));
       await this.publishVisitorPresence(client.data, 'ONLINE');
+      // Routing waits while the visitor is asked to choose a topic.
+      if (result.intake?.mode === 'ASK') {
+        acknowledge({ ok: true, data: result });
+        return;
+      }
       const routed = await this.routing.routeConversation(
         client.data.businessId,
         result.conversation.id,
       );
       acknowledge({ ok: true, data: { ...result, conversation: routed.conversation } });
+    } catch (error) {
+      acknowledge(this.failure(error));
+    }
+  }
+
+  /** The visitor picks a topic (null = "Something else"), or changes it while still waiting. */
+  @SubscribeMessage('conversation.intake.submit')
+  public async submitIntake(
+    @ConnectedSocket() client: WidgetSocket,
+    @MessageBody() input: unknown,
+    @Ack() acknowledge: SocketAcknowledger<ConversationRoutingEvent>,
+  ): Promise<void> {
+    const parsed = intakeSubmitSchema.safeParse(input);
+    if (!parsed.success) {
+      acknowledge(validationFailure(parsed.error.flatten()));
+      return;
+    }
+    try {
+      acknowledge({ ok: true, data: await this.intake.submit(client.data, parsed.data) });
     } catch (error) {
       acknowledge(this.failure(error));
     }

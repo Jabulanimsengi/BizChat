@@ -15,6 +15,7 @@ import { PresenceService } from '../realtime/presence.service';
 import { RedisService } from '../realtime/redis.service';
 import { ACQUIRE_OR_RENEW_LEASE_SCRIPT, RELEASE_IF_HOLDER_SCRIPT } from '../realtime/redis-lock';
 import { ConversationOfferService } from '../routing/conversation-offer.service';
+import { IntakeService } from '../intake/intake.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
 import { ASSIGNED_STATUSES } from '../routing/routing-policy';
 import {
@@ -47,6 +48,7 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
     private readonly redis: RedisService,
     config: ConfigService<Environment, true>,
     private readonly offers: ConversationOfferService,
+    private readonly intake: IntakeService,
   ) {
     this.sweepIntervalMs = config.get('RELIABILITY_SWEEP_INTERVAL_MS', { infer: true });
     this.retryBaseMs = config.get('RELIABILITY_RETRY_BASE_MS', { infer: true });
@@ -183,9 +185,15 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
       });
       for (const conversation of due) await this.processDueConversation(conversation);
       await this.offers.expireDue();
+      await this.intake.expirePrompts();
       await this.routing.abandonDepartedVisitors();
       const unrouted = await this.prisma.conversation.findMany({
-        where: { assignedAgentMembershipId: null, status: 'NEW', reassignmentDueAt: null },
+        where: {
+          assignedAgentMembershipId: null,
+          status: 'NEW',
+          reassignmentDueAt: null,
+          intakeStatus: { in: ['NOT_REQUIRED', 'COMPLETE'] },
+        },
         select: { businessId: true, id: true },
         orderBy: { createdAt: 'asc' },
         take: SWEEP_BATCH_SIZE,

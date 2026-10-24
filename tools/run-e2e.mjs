@@ -48,6 +48,7 @@ const singleNodePhases = [
   'phase6-smoke.mjs',
   'phase9-smoke.mjs',
   'phaseB2-smoke.mjs',
+  'phaseB3-smoke.mjs',
 ];
 
 const redis = new Redis(environment.REDIS_URL);

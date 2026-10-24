@@ -142,6 +142,7 @@ enum ConversationEventType {
   TAGS_CHANGED
   INTERNAL_NOTE_ADDED
   OFFERED
+  TOPIC_SET
 }
 
 enum ConversationEventActorType {
@@ -173,16 +174,40 @@ enum OfferOutcome {
   CANCELLED
 }
 
+// Routing waits while intake is AWAITING_TOPIC or AWAITING_FORM.
+enum IntakeStatus {
+  NOT_REQUIRED
+  AWAITING_TOPIC
+  AWAITING_FORM
+  COMPLETE
+}
+
+enum ClassificationMethod {
+  KEYWORD
+  VISITOR_CHOICE
+  INTEGRATION
+  DEFAULT
+  TIMEOUT
+}
+
+enum ClassificationDecision {
+  ROUTE
+  CONFIRM
+  ASK
+}
+
 model Business {
-  id                       String                   @id @default(uuid()) @db.Uuid
-  name                     String                   @db.VarChar(120)
-  slug                     String                   @unique @db.VarChar(80)
-  publicId                 String                   @unique @db.VarChar(64)
-  status                   BusinessStatus           @default(TRIAL)
-  timezone                 String                   @default("UTC") @db.VarChar(100)
-  defaultLocale            String                   @default("en") @db.VarChar(35)
-  createdAt                DateTime                 @default(now())
-  updatedAt                DateTime                 @updatedAt
+  id                       String                       @id @default(uuid()) @db.Uuid
+  // Incremented on every topic change so API instances refresh their cached classifier.
+  topicCatalogVersion      Int                          @default(0)
+  name                     String                       @db.VarChar(120)
+  slug                     String                       @unique @db.VarChar(80)
+  publicId                 String                       @unique @db.VarChar(64)
+  status                   BusinessStatus               @default(TRIAL)
+  timezone                 String                       @default("UTC") @db.VarChar(100)
+  defaultLocale            String                       @default("en") @db.VarChar(35)
+  createdAt                DateTime                     @default(now())
+  updatedAt                DateTime                     @updatedAt
   memberships              BusinessMembership[]
   auditLogs                AuditLog[]
   domains                  BusinessDomain[]
@@ -212,6 +237,8 @@ model Business {
   agentSkills              AgentSkill[]
   routingSettings          RoutingSettings?
   conversationOffers       ConversationOffer[]
+  topics                   Topic[]
+  classifications          ConversationClassification[]
 
   @@index([status])
   @@map("businesses")
@@ -403,10 +430,63 @@ model Skill {
   business      Business       @relation(fields: [businessId], references: [id], onDelete: Restrict)
   agents        AgentSkill[]
   conversations Conversation[]
+  topics        Topic[]
 
   @@unique([businessId, name])
   @@index([businessId, status, name])
   @@map("skills")
+}
+
+model Topic {
+  id                          String                       @id @default(uuid()) @db.Uuid
+  businessId                  String                       @db.Uuid
+  publicId                    String                       @unique @db.VarChar(64)
+  name                        String                       @db.VarChar(100)
+  description                 String?                      @db.VarChar(500)
+  // Null routes to the tenant's default department.
+  departmentId                String?                      @db.Uuid
+  requiredSkillId             String?                      @db.Uuid
+  requiredSkillMinProficiency Int?
+  priority                    ConversationPriority         @default(NORMAL)
+  // [{ phrase, weight }], validated by the API.
+  keywords                    Json                         @default("[]")
+  negativeKeywords            String[]                     @default([])
+  examples                    String[]                     @default([])
+  showAsQuickReply            Boolean                      @default(true)
+  isDefault                   Boolean                      @default(false)
+  status                      ResourceStatus               @default(ACTIVE)
+  sortOrder                   Int                          @default(0)
+  createdAt                   DateTime                     @default(now())
+  updatedAt                   DateTime                     @updatedAt
+  business                    Business                     @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  department                  Department?                  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  requiredSkill               Skill?                       @relation(fields: [requiredSkillId], references: [id], onDelete: SetNull)
+  conversations               Conversation[]
+  classifications             ConversationClassification[]
+
+  @@unique([businessId, name])
+  @@index([businessId, status, sortOrder])
+  @@map("topics")
+}
+
+model ConversationClassification {
+  id             String                  @id @default(uuid()) @db.Uuid
+  businessId     String                  @db.Uuid
+  conversationId String                  @db.Uuid
+  topicId        String?                 @db.Uuid
+  method         ClassificationMethod
+  decision       ClassificationDecision?
+  confidence     Float?
+  // Top scored topics: [{ topicId, score }].
+  candidates     Json?
+  createdAt      DateTime                @default(now())
+  business       Business                @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  conversation   Conversation            @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  topic          Topic?                  @relation(fields: [topicId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, createdAt])
+  @@index([conversationId, createdAt])
+  @@map("conversation_classifications")
 }
 
 // Proficiency is 1-5, enforced by a database check constraint.
@@ -428,17 +508,21 @@ model AgentSkill {
 }
 
 model RoutingSettings {
-  id                     String          @id @default(uuid()) @db.Uuid
-  businessId             String          @unique @db.Uuid
-  routingStrategy        RoutingStrategy @default(LEAST_BUSY)
+  id                        String          @id @default(uuid()) @db.Uuid
+  businessId                String          @unique @db.Uuid
+  routingStrategy           RoutingStrategy @default(LEAST_BUSY)
   // Rows default to AUTO so existing tenants keep direct assignment; registration stores OFFER.
-  assignmentMode         AssignmentMode  @default(AUTO)
-  offerTimeoutSeconds    Int             @default(30)
-  missedOffersBeforeAway Int             @default(2)
-  exclusionSeconds       Int             @default(300)
-  createdAt              DateTime        @default(now())
-  updatedAt              DateTime        @updatedAt
-  business               Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  assignmentMode            AssignmentMode  @default(AUTO)
+  offerTimeoutSeconds       Int             @default(30)
+  missedOffersBeforeAway    Int             @default(2)
+  exclusionSeconds          Int             @default(300)
+  // Classifier confidence at or above autoRouteThreshold routes; below confirmThreshold asks.
+  autoRouteThreshold        Float           @default(0.6)
+  confirmThreshold          Float           @default(0.35)
+  topicPromptTimeoutSeconds Int             @default(60)
+  createdAt                 DateTime        @default(now())
+  updatedAt                 DateTime        @updatedAt
+  business                  Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
   @@map("routing_settings")
 }
@@ -459,6 +543,7 @@ model Department {
   assignments     ConversationAssignment[]
   queueEntries    ConversationQueueEntry[]
   cannedResponses CannedResponse[]
+  topics          Topic[]
 
   @@unique([businessId, name])
   @@index([businessId, status, createdAt])
@@ -545,40 +630,46 @@ model AuditLog {
 }
 
 model Conversation {
-  id                          String                    @id @default(uuid()) @db.Uuid
-  businessId                  String                    @db.Uuid
-  visitorId                   String?                   @db.Uuid
-  customerId                  String?                   @db.Uuid
-  departmentId                String?                   @db.Uuid
-  assignedAgentMembershipId   String?                   @db.Uuid
+  id                          String                       @id @default(uuid()) @db.Uuid
+  businessId                  String                       @db.Uuid
+  visitorId                   String?                      @db.Uuid
+  customerId                  String?                      @db.Uuid
+  departmentId                String?                      @db.Uuid
+  assignedAgentMembershipId   String?                      @db.Uuid
   // Set by topics (Phase B3); routing then requires this skill at the minimum proficiency (1-5).
-  requiredSkillId             String?                   @db.Uuid
+  requiredSkillId             String?                      @db.Uuid
   requiredSkillMinProficiency Int?
-  status                      ConversationStatus        @default(NEW)
-  priority                    ConversationPriority      @default(NORMAL)
-  source                      ConversationSource        @default(WEB_WIDGET)
-  subject                     String?                   @db.VarChar(240)
-  nextSequence                BigInt                    @default(0)
-  createdAt                   DateTime                  @default(now())
-  updatedAt                   DateTime                  @updatedAt
+  topicId                     String?                      @db.Uuid
+  intakeStatus                IntakeStatus                 @default(NOT_REQUIRED)
+  // When an unanswered topic prompt falls back to the default topic.
+  intakeExpiresAt             DateTime?
+  status                      ConversationStatus           @default(NEW)
+  priority                    ConversationPriority         @default(NORMAL)
+  source                      ConversationSource           @default(WEB_WIDGET)
+  subject                     String?                      @db.VarChar(240)
+  nextSequence                BigInt                       @default(0)
+  createdAt                   DateTime                     @default(now())
+  updatedAt                   DateTime                     @updatedAt
   assignedAt                  DateTime?
   firstResponseAt             DateTime?
   resolvedAt                  DateTime?
   reopenedAt                  DateTime?
   agentDisconnectedAt         DateTime?
   reassignmentDueAt           DateTime?
-  reassignmentAttempts        Int                       @default(0)
-  reassignmentLastError       String?                   @db.VarChar(500)
+  reassignmentAttempts        Int                          @default(0)
+  reassignmentLastError       String?                      @db.VarChar(500)
   closedAt                    DateTime?
   lastMessageAt               DateTime?
   // Set while status is OFFERED; assignedAgentMembershipId then holds the offered consultant.
-  currentOfferId              String?                   @db.Uuid
+  currentOfferId              String?                      @db.Uuid
   offerExpiresAt              DateTime?
-  business                    Business                  @relation(fields: [businessId], references: [id], onDelete: Restrict)
-  visitor                     Visitor?                  @relation(fields: [visitorId], references: [id], onDelete: Restrict)
-  assignedAgent               BusinessMembership?       @relation("AssignedAgent", fields: [assignedAgentMembershipId], references: [id], onDelete: SetNull)
-  department                  Department?               @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  requiredSkill               Skill?                    @relation(fields: [requiredSkillId], references: [id], onDelete: SetNull)
+  business                    Business                     @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  visitor                     Visitor?                     @relation(fields: [visitorId], references: [id], onDelete: Restrict)
+  assignedAgent               BusinessMembership?          @relation("AssignedAgent", fields: [assignedAgentMembershipId], references: [id], onDelete: SetNull)
+  department                  Department?                  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  requiredSkill               Skill?                       @relation(fields: [requiredSkillId], references: [id], onDelete: SetNull)
+  topic                       Topic?                       @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  classifications             ConversationClassification[]
   participants                ConversationParticipant[]
   messages                    Message[]
   attachments                 Attachment[]
@@ -596,6 +687,7 @@ model Conversation {
   // Cross-tenant sweep scans (unrouted and abandoned conversations).
   @@index([status, createdAt])
   @@index([status, offerExpiresAt])
+  @@index([intakeStatus, intakeExpiresAt])
   @@map("conversations")
 }
 

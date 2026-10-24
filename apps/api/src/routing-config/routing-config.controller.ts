@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -10,14 +12,25 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import type { RoutingSettingsResponse, SkillResponse } from '@bizchat/types';
+import type {
+  RoutingSettingsResponse,
+  SkillResponse,
+  TopicResponse,
+  TopicTestResponse,
+} from '@bizchat/types';
 import {
   createSkillSchema,
+  createTopicSchema,
+  topicTestSchema,
   updateRoutingSettingsSchema,
   updateSkillSchema,
+  updateTopicSchema,
   type CreateSkillInput,
+  type CreateTopicInput,
+  type TopicTestInput,
   type UpdateRoutingSettingsInput,
   type UpdateSkillInput,
+  type UpdateTopicInput,
 } from '@bizchat/validation';
 import { AuthorizationGuard } from '../auth/authorization.guard';
 import { CurrentAuth, RequirePermissions } from '../auth/auth.decorators';
@@ -27,6 +40,7 @@ import type { AuthContext, AuthenticatedRequest } from '../common/http.types';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { RoutingSettingsService } from './routing-settings.service';
 import { SkillService } from './skill.service';
+import { TopicService } from './topic.service';
 
 @Controller()
 @UseGuards(SessionAuthGuard, AuthorizationGuard)
@@ -34,6 +48,7 @@ export class RoutingConfigController {
   public constructor(
     private readonly skills: SkillService,
     private readonly settings: RoutingSettingsService,
+    private readonly topics: TopicService,
   ) {}
 
   @Get('skills')
@@ -63,6 +78,47 @@ export class RoutingConfigController {
     @Req() request: AuthenticatedRequest,
   ): Promise<SkillResponse> {
     return this.skills.update(auth, id, input, request.requestId, request.ip);
+  }
+
+  @Get('topics')
+  @RequirePermissions('department:manage')
+  public listTopics(@CurrentAuth() auth: AuthContext): Promise<TopicResponse[]> {
+    return this.topics.list(auth);
+  }
+
+  @Post('topics')
+  @UseGuards(OriginGuard)
+  @RequirePermissions('department:manage')
+  public createTopic(
+    @CurrentAuth() auth: AuthContext,
+    @Body(new ZodValidationPipe(createTopicSchema)) input: CreateTopicInput,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<TopicResponse> {
+    return this.topics.create(auth, input, request.requestId, request.ip);
+  }
+
+  @Patch('topics/:id')
+  @UseGuards(OriginGuard)
+  @RequirePermissions('department:manage')
+  public updateTopic(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(updateTopicSchema)) input: UpdateTopicInput,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<TopicResponse> {
+    return this.topics.update(auth, id, input, request.requestId, request.ip);
+  }
+
+  /** Previews how a message would be classified, without creating anything. */
+  @Post('topics/test')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(OriginGuard)
+  @RequirePermissions('department:manage')
+  public testTopic(
+    @CurrentAuth() auth: AuthContext,
+    @Body(new ZodValidationPipe(topicTestSchema)) input: TopicTestInput,
+  ): Promise<TopicTestResponse> {
+    return this.topics.test(auth, input.message);
   }
 
   @Get('routing/settings')

@@ -26,6 +26,7 @@ describe('WidgetService', () => {
   const prisma = {
     business: { findUnique: jest.fn() },
     department: { findMany: jest.fn() },
+    topic: { findMany: jest.fn().mockResolvedValue([]) },
     visitorSession: {
       findFirst: jest.fn<Promise<{ id: string; visitorId: string } | null>, [unknown]>(),
       update: jest.fn(),

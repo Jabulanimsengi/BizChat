@@ -13,8 +13,15 @@ import { IntegrationGuard } from './integration.guard';
 import { IntegrationService } from './integration.service';
 import { WebhookService } from './webhook.service';
 import { WebhookTransport } from './webhook-transport';
+import { IntakeModule } from '../intake/intake.module';
 @Module({
-  imports: [AuthModule, ConversationModule, ConversationTimelineModule, CustomerIdentityModule],
+  imports: [
+    AuthModule,
+    ConversationModule,
+    ConversationTimelineModule,
+    CustomerIdentityModule,
+    IntakeModule,
+  ],
   controllers: [
     IntegrationController,
     IntegrationSettingsController,

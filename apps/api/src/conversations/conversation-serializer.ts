@@ -14,6 +14,8 @@ export function serializeConversation(conversation: Conversation): ConversationR
     assignedAgentMembershipId: conversation.assignedAgentMembershipId,
     departmentId: conversation.departmentId,
     departmentName: null,
+    topicId: conversation.topicId,
+    intakeStatus: conversation.intakeStatus,
     queuedAt: null,
     queuePosition: null,
     resolvedAt: conversation.resolvedAt?.toISOString() ?? null,

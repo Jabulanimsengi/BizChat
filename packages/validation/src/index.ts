@@ -133,7 +133,24 @@ export const conversationStartSchema = z.object({
     .trim()
     .regex(/^dept_[A-Za-z0-9_-]{8,60}$/)
     .optional(),
+  topicPublicId: z
+    .string()
+    .trim()
+    .regex(/^topic_[A-Za-z0-9_-]{8,60}$/)
+    .optional(),
 });
+
+/** The visitor's topic choice; null means "Something else" (the default topic). */
+export const intakeSubmitSchema = z
+  .object({
+    conversationId: z.string().uuid(),
+    topicPublicId: z
+      .string()
+      .trim()
+      .regex(/^topic_[A-Za-z0-9_-]{8,60}$/)
+      .nullable(),
+  })
+  .strict();
 
 export const createDepartmentSchema = z.object({
   name: z.string().trim().min(2).max(100),
@@ -183,9 +200,75 @@ export const updateRoutingSettingsSchema = z
     offerTimeoutSeconds: z.number().int().min(10).max(120).optional(),
     missedOffersBeforeAway: z.number().int().min(0).max(10).optional(),
     exclusionSeconds: z.number().int().min(60).max(3600).optional(),
+    autoRouteThreshold: z.number().min(0.1).max(0.95).optional(),
+    confirmThreshold: z.number().min(0.05).max(0.9).optional(),
+    topicPromptTimeoutSeconds: z.number().int().min(15).max(600).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'At least one field is required')
+  .refine(
+    (value) =>
+      value.autoRouteThreshold === undefined ||
+      value.confirmThreshold === undefined ||
+      value.confirmThreshold < value.autoRouteThreshold,
+    'The confirm threshold must be below the auto-route threshold',
+  );
+
+const topicTextSchema = z.string().trim().min(1).max(80);
+const topicFields = {
+  name: z.string().trim().min(2).max(100),
+  description: z.string().trim().max(500).nullable(),
+  departmentId: z.string().uuid().nullable(),
+  requiredSkillId: z.string().uuid().nullable(),
+  requiredSkillMinProficiency: z.number().int().min(1).max(5).nullable(),
+  priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']),
+  keywords: z
+    .array(z.object({ phrase: topicTextSchema, weight: z.number().int().min(1).max(5).optional() }))
+    .max(50),
+  negativeKeywords: z.array(topicTextSchema).max(30),
+  examples: z.array(z.string().trim().min(1).max(240)).max(20),
+  showAsQuickReply: z.boolean(),
+  isDefault: z.boolean(),
+  sortOrder: z.number().int().min(0).max(1000),
+};
+
+export const createTopicSchema = z
+  .object({
+    name: topicFields.name,
+    description: topicFields.description.optional(),
+    departmentId: topicFields.departmentId.optional(),
+    requiredSkillId: topicFields.requiredSkillId.optional(),
+    requiredSkillMinProficiency: topicFields.requiredSkillMinProficiency.optional(),
+    priority: topicFields.priority.default('NORMAL'),
+    keywords: topicFields.keywords.default([]),
+    negativeKeywords: topicFields.negativeKeywords.default([]),
+    examples: topicFields.examples.default([]),
+    showAsQuickReply: topicFields.showAsQuickReply.default(true),
+    isDefault: topicFields.isDefault.default(false),
+    sortOrder: topicFields.sortOrder.default(0),
+  })
+  .strict();
+
+export const updateTopicSchema = z
+  .object({
+    name: topicFields.name.optional(),
+    description: topicFields.description.optional(),
+    departmentId: topicFields.departmentId.optional(),
+    requiredSkillId: topicFields.requiredSkillId.optional(),
+    requiredSkillMinProficiency: topicFields.requiredSkillMinProficiency.optional(),
+    priority: topicFields.priority.optional(),
+    keywords: topicFields.keywords.optional(),
+    negativeKeywords: topicFields.negativeKeywords.optional(),
+    examples: topicFields.examples.optional(),
+    showAsQuickReply: topicFields.showAsQuickReply.optional(),
+    isDefault: topicFields.isDefault.optional(),
+    sortOrder: topicFields.sortOrder.optional(),
+    status: z.enum(['ACTIVE', 'DISABLED']).optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+
+export const topicTestSchema = z.object({ message: messageContentSchema }).strict();
 
 export const offerResponseSchema = z
   .object({
@@ -448,6 +531,10 @@ export type UpdateSkillInput = z.infer<typeof updateSkillSchema>;
 export type AgentSkillInput = z.infer<typeof agentSkillSchema>;
 export type UpdateRoutingSettingsInput = z.infer<typeof updateRoutingSettingsSchema>;
 export type OfferResponseInput = z.infer<typeof offerResponseSchema>;
+export type IntakeSubmitInput = z.infer<typeof intakeSubmitSchema>;
+export type CreateTopicInput = z.infer<typeof createTopicSchema>;
+export type UpdateTopicInput = z.infer<typeof updateTopicSchema>;
+export type TopicTestInput = z.infer<typeof topicTestSchema>;
 export type UpdateBusinessHoursInput = z.infer<typeof updateBusinessHoursSchema>;
 export type CreateBusinessUserInput = z.infer<typeof createBusinessUserSchema>;
 export type UpdateBusinessUserInput = z.infer<typeof updateBusinessUserSchema>;

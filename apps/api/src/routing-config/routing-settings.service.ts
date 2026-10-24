@@ -1,18 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import type { RoutingSettingsResponse } from '@bizchat/types';
 import type { UpdateRoutingSettingsInput } from '@bizchat/validation';
 import { AuditService } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
-
-/** Applies to tenants with no stored row: direct assignment, as before Phase B. */
-export const DEFAULT_ROUTING_SETTINGS: RoutingSettingsResponse = {
-  routingStrategy: 'LEAST_BUSY',
-  assignmentMode: 'AUTO',
-  offerTimeoutSeconds: 30,
-  missedOffersBeforeAway: 2,
-  exclusionSeconds: 300,
-};
+import { DEFAULT_ROUTING_SETTINGS } from './routing-settings.defaults';
 
 const settingsSelect = {
   routingStrategy: true,
@@ -20,6 +12,9 @@ const settingsSelect = {
   offerTimeoutSeconds: true,
   missedOffersBeforeAway: true,
   exclusionSeconds: true,
+  autoRouteThreshold: true,
+  confirmThreshold: true,
+  topicPromptTimeoutSeconds: true,
 } as const;
 
 @Injectable()
@@ -44,6 +39,17 @@ export class RoutingSettingsService {
     requestId: string,
     ipAddress?: string,
   ): Promise<RoutingSettingsResponse> {
+    if (input.autoRouteThreshold !== undefined || input.confirmThreshold !== undefined) {
+      // A single threshold change must still leave confirm below auto-route.
+      const current = await this.get(auth);
+      const auto = input.autoRouteThreshold ?? current.autoRouteThreshold;
+      const confirm = input.confirmThreshold ?? current.confirmThreshold;
+      if (confirm >= auto)
+        throw new BadRequestException({
+          code: 'INVALID_THRESHOLDS',
+          message: 'The confirm threshold must be below the auto-route threshold',
+        });
+    }
     const settings = await this.prisma.routingSettings.upsert({
       where: { businessId: auth.business.id },
       update: input,

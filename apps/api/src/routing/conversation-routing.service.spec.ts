@@ -490,6 +490,29 @@ describe('ConversationRoutingService', () => {
     });
   });
 
+  it('does not route a conversation still waiting for the visitor to pick a topic', async () => {
+    const prisma = {
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue({
+          ...conversationRow({ status: 'NEW', departmentId: null }),
+          intakeStatus: 'AWAITING_TOPIC',
+          topicId: null,
+        }),
+      },
+      conversationQueueEntry: { findUnique: jest.fn().mockResolvedValue(null) },
+      conversationTag: { findMany: jest.fn().mockResolvedValue([]) },
+      routingSettings: { findUnique: jest.fn() },
+      agentProfile: { findMany: jest.fn() },
+    };
+    const service = createService(prisma, lockingRedis());
+
+    const result = await service.routeConversation('business-1', 'conversation-1');
+
+    expect(result.outcome).toBe('QUEUED');
+    expect(prisma.routingSettings.findUnique).not.toHaveBeenCalled();
+    expect(prisma.agentProfile.findMany).not.toHaveBeenCalled();
+  });
+
   describe('offers', () => {
     const offeredRow = {
       ...conversationRow({ status: 'OFFERED', visitorId: null, departmentId: null }),

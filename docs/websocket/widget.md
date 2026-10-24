@@ -26,7 +26,17 @@ Success is acknowledged only after PostgreSQL commits.
 - Server to client `widget.connected`: `{ connectedAt, sessionExpiresAt }`
 - Client to server `widget.heartbeat`: no payload
 - Server to client `widget.heartbeat.ack`: `{ serverTime }`
-- Client to server `conversation.start`: `{ clientMessageId, content }`
+- Client to server `conversation.start`: `{ clientMessageId, content, topicPublicId?,
+departmentPublicId? }`. When the tenant has topics and no topic or department is given, the message
+  is classified. The acknowledgement may include `intake`: with `mode: 'ASK'` routing waits until
+  the visitor chooses (or the prompt expires); with `mode: 'CONFIRM'` the chat is already routing and
+  the visitor may change the topic.
+- Client to server `conversation.intake.submit`: `{ conversationId, topicPublicId }` where `null`
+  means "Something else" (the default topic). Returns the routing event, or `TOPIC_LOCKED` once a
+  consultant has been offered or assigned the chat. `conversation.resume` re-sends an unanswered
+  `ASK` prompt.
+- Bootstrap includes `topics`: the tenant's quick-reply topics, shown as buttons before the first
+  message.
 - Client to server `conversation.resume`: `{ conversationId, afterSequence?, limit? }`
 - Client to server `conversation.history`: `{ conversationId, beforeSequence, limit? }`
 - Client to server `message.send`: `{ conversationId, clientMessageId, content }`

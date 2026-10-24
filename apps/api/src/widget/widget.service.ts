@@ -108,6 +108,11 @@ export class WidgetService {
       select: { publicId: true, name: true },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
     });
+    const topics = await this.prisma.topic.findMany({
+      where: { businessId: business.id, status: 'ACTIVE', showAsQuickReply: true },
+      select: { publicId: true, name: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
     return {
       ...(identity
         ? {
@@ -130,6 +135,7 @@ export class WidgetService {
       availability: 'UNKNOWN',
       config,
       departments,
+      topics,
     };
   }
 

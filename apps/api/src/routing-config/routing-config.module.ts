@@ -1,13 +1,15 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { IntakeModule } from '../intake/intake.module';
 import { RoutingConfigController } from './routing-config.controller';
 import { RoutingSettingsService } from './routing-settings.service';
 import { SkillService } from './skill.service';
+import { TopicService } from './topic.service';
 
-/** Tenant routing configuration: the skill catalogue and routing settings. */
+/** Tenant routing configuration: skills, topics, and routing settings. */
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, IntakeModule],
   controllers: [RoutingConfigController],
-  providers: [SkillService, RoutingSettingsService],
+  providers: [SkillService, RoutingSettingsService, TopicService],
 })
 export class RoutingConfigModule {}

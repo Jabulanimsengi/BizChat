@@ -295,3 +295,35 @@ accept, two dashboard tabs racing to accept with exactly one winner, two expirie
 consultant away with both chats requeued and an expired offer rejected, the queue draining to a
 consultant who returns, and a disconnect cancelling and re-offering a pending offer. The dashboard
 offer card and settings were type-checked but not exercised in a browser.
+
+## Phase B3 - Topics and intent routing — 2026-10-24
+
+- Tenant topics (**Dashboard → Routing**) with a department, optional required skill and minimum
+  level, priority, weighted keywords and phrases, negative keywords, example messages, quick-reply
+  visibility, ordering, and one default topic per tenant. Every edit bumps a catalogue version, so
+  each API instance recompiles its cached classifier on next use.
+- A deterministic keyword classifier normalises the first message, stems words, tolerates one typo
+  in longer words, matches phrases only when their words are adjacent, and scores examples as a
+  weaker signal. Confidence `s1 / (s1 + s2 + 1)` decides: route (default ≥ 0.6), route and let the
+  visitor change the topic (≥ 0.35), or ask. Thresholds and the 60-second prompt timeout are tenant
+  settings. **Test a message** previews a decision without creating anything.
+- The widget shows topic buttons before the first message. When asked, routing waits
+  (`AWAITING_TOPIC`) until the visitor chooses or the prompt expires, then the default topic applies.
+  A visitor can change the topic until a consultant is offered or assigned the chat.
+- The integration API accepts `topicPublicId` or classifies the subject and message, falling back to
+  the default topic when uncertain. Every decision is stored in `conversation_classifications`.
+- Fixed while building B3: the widget sent the hidden department picker's first option with every
+  new chat, and a chat that started as `OFFERED` briefly told the visitor it was assigned.
+- Migrations `20261024110000_phase_b3_topic_enums` and `20261024110100_phase_b3_topics` are
+  additive. Tenants without topics route exactly as before.
+
+Verification: format, lint, and type checks pass in every workspace; 196 API unit tests (coverage
+gate passed, 37.54% statements), 11 dashboard, 5 widget, and 23 validation tests pass. Against the
+Docker test stack, all 17 migrations apply to an empty database and all 23 HTTP integration tests
+pass, including topic management, one default per tenant, cross-tenant isolation, the preview, and
+integration API classification. The end-to-end suite passes, including the new `phaseB3-smoke.mjs`:
+a confident match routed to its department with the topic locked once assigned, an unclear message
+held until the visitor chose a topic, a quick-reply topic applied without classification, and an
+unanswered prompt falling back to the default topic. The first HTTP run failed one assertion that
+still expected the pre-B3 settings object; it passed after the expectation was updated. The widget
+prompts and dashboard topic editor were type-checked but not exercised in a browser.

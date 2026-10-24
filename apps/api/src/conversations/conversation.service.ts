@@ -56,6 +56,8 @@ import {
 } from '../routing/routing-events';
 import { ConversationTimelineService } from './conversation-timeline.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
+import { IntakeService } from '../intake/intake.service';
+import { classificationRecord, TopicCatalogService } from '../intake/topic-catalog.service';
 
 const OPEN_VISITOR_STATUSES = [
   'NEW',
@@ -109,6 +111,8 @@ export class ConversationService {
     private readonly presence: PresenceService,
     private readonly timeline: ConversationTimelineService,
     private readonly routing: ConversationRoutingService,
+    private readonly topics: TopicCatalogService,
+    private readonly intake: IntakeService,
   ) {}
 
   public async startVisitor(
@@ -124,6 +128,15 @@ export class ConversationService {
       include: { conversation: true, receipts: true },
     });
     if (previous) return this.sessionResponse(identity, previous.conversation, previous);
+
+    // Decided before the transaction (it needs only the message and the cached topic catalogue) and
+    // used only if this message starts a new conversation. An explicit department skips topics.
+    const intake = input.departmentPublicId
+      ? null
+      : await this.topics.decide(identity.businessId, input.content, {
+          ...(input.topicPublicId ? { topicPublicId: input.topicPublicId } : {}),
+          canAsk: true,
+        });
 
     let outcome: {
       conversation: Conversation;
@@ -240,9 +253,11 @@ export class ConversationService {
                     status: 'ACTIVE',
                   },
                 })
-              : await transaction.department.findFirst({
-                  where: { businessId: identity.businessId, status: 'ACTIVE', isDefault: true },
-                });
+              : intake?.routing.departmentId
+                ? { id: intake.routing.departmentId }
+                : await transaction.department.findFirst({
+                    where: { businessId: identity.businessId, status: 'ACTIVE', isDefault: true },
+                  });
             if (input.departmentPublicId && !department)
               throw new NotFoundException({
                 code: 'DEPARTMENT_NOT_FOUND',
@@ -254,6 +269,16 @@ export class ConversationService {
                 visitorId: identity.visitorId,
                 source: 'WEB_WIDGET',
                 departmentId: department?.id,
+                ...(intake
+                  ? {
+                      topicId: intake.routing.topicId,
+                      priority: intake.routing.priority,
+                      requiredSkillId: intake.routing.requiredSkillId,
+                      requiredSkillMinProficiency: intake.routing.requiredSkillMinProficiency,
+                      intakeStatus: intake.intakeStatus,
+                      intakeExpiresAt: intake.intakeExpiresAt,
+                    }
+                  : {}),
                 participants: {
                   create: {
                     businessId: identity.businessId,
@@ -271,6 +296,10 @@ export class ConversationService {
               actorId: identity.visitorId,
               metadata: { source: 'WEB_WIDGET', departmentId: department?.id ?? null },
             });
+            if (intake)
+              await transaction.conversationClassification.create({
+                data: classificationRecord(identity.businessId, conversation.id, intake),
+              });
             conversationCreated = true;
           }
         }
@@ -323,7 +352,10 @@ export class ConversationService {
         assignedAgentMembershipId: null,
       } satisfies ConversationOperationApplicationEvent);
     }
-    return this.sessionResponse(identity, outcome.conversation, outcome.message);
+    const response = await this.sessionResponse(identity, outcome.conversation, outcome.message);
+    // A new conversation's prompt lists the best-matching topics first.
+    const prompt = outcome.conversationCreated ? this.intake.prompt(intake) : undefined;
+    return prompt ? { ...response, intake: prompt } : response;
   }
 
   public async sendVisitor(
@@ -380,7 +412,12 @@ export class ConversationService {
       },
       true,
     );
-    return { conversation: await this.conversationResponse(conversation), history };
+    const intake = await this.intake.pendingPrompt(conversation);
+    return {
+      conversation: await this.conversationResponse(conversation),
+      history,
+      ...(intake ? { intake } : {}),
+    };
   }
 
   public async getVisitorHistory(
@@ -874,10 +911,12 @@ export class ConversationService {
     message?: Message & { receipts?: MessageReceipt[] },
   ): Promise<ConversationSessionResponse> {
     const history = await this.history(identity.businessId, conversation.id, { limit: 50 }, true);
+    const intake = await this.intake.pendingPrompt(conversation);
     return {
       conversation: await this.conversationResponse(conversation),
       ...(message ? { message: serializeMessage(message) } : {}),
       history,
+      ...(intake ? { intake } : {}),
     };
   }
 

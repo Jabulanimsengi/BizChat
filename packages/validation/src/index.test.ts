@@ -26,7 +26,59 @@ import {
   updateBusinessUserSchema,
   updateRoutingSettingsSchema,
   offerResponseSchema,
+  createTopicSchema,
+  updateTopicSchema,
+  intakeSubmitSchema,
 } from './index';
+
+describe('topic validation', () => {
+  it('fills topic defaults and bounds keyword weights', () => {
+    const parsed = createTopicSchema.parse({ name: 'Company registration' });
+    expect(parsed).toMatchObject({
+      priority: 'NORMAL',
+      keywords: [],
+      showAsQuickReply: true,
+      isDefault: false,
+    });
+    expect(
+      createTopicSchema.safeParse({ name: 'Tax', keywords: [{ phrase: 'vat', weight: 6 }] })
+        .success,
+    ).toBe(false);
+    expect(
+      createTopicSchema.safeParse({ name: 'Tax', requiredSkillMinProficiency: 0 }).success,
+    ).toBe(false);
+  });
+
+  it('requires at least one field on update and rejects unknown fields', () => {
+    expect(updateTopicSchema.safeParse({}).success).toBe(false);
+    expect(updateTopicSchema.safeParse({ status: 'DISABLED' }).success).toBe(true);
+    expect(updateTopicSchema.safeParse({ businessId: 'x' }).success).toBe(false);
+  });
+
+  it('accepts a topic choice or "something else" (null)', () => {
+    const conversationId = '7d3c1c8e-5b1f-4c1a-9a43-2f7f5b1c9e10';
+    expect(
+      intakeSubmitSchema.safeParse({ conversationId, topicPublicId: 'topic_abcdefgh12' }).success,
+    ).toBe(true);
+    expect(intakeSubmitSchema.safeParse({ conversationId, topicPublicId: null }).success).toBe(
+      true,
+    );
+    expect(intakeSubmitSchema.safeParse({ conversationId, topicPublicId: 'dept_x' }).success).toBe(
+      false,
+    );
+  });
+
+  it('keeps the confirm threshold below the auto-route threshold', () => {
+    expect(
+      updateRoutingSettingsSchema.safeParse({ autoRouteThreshold: 0.5, confirmThreshold: 0.6 })
+        .success,
+    ).toBe(false);
+    expect(
+      updateRoutingSettingsSchema.safeParse({ autoRouteThreshold: 0.7, confirmThreshold: 0.3 })
+        .success,
+    ).toBe(true);
+  });
+});
 
 describe('skill routing validation', () => {
   const skillId = '7d3c1c8e-5b1f-4c1a-9a43-2f7f5b1c9e10';

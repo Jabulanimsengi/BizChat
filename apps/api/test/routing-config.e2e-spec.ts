@@ -3,7 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
-import type { BusinessUserResponse, SkillResponse } from '@bizchat/types';
+import type { BusinessUserResponse, SkillResponse, TopicResponse } from '@bizchat/types';
 import { AppModule } from '../src/app.module';
 import { configureApplication } from '../src/configure-app';
 import { PrismaService } from '../src/database/prisma.service';
@@ -129,6 +129,9 @@ describe('Routing configuration (real PostgreSQL and Redis)', () => {
       offerTimeoutSeconds: 30,
       missedOffersBeforeAway: 2,
       exclusionSeconds: 300,
+      autoRouteThreshold: 0.6,
+      confirmThreshold: 0.35,
+      topicPromptTimeoutSeconds: 60,
     };
     await request(server)
       .get('/api/v1/routing/settings')
@@ -179,5 +182,143 @@ describe('Routing configuration (real PostgreSQL and Redis)', () => {
         },
       }),
     ).rejects.toThrow();
+  });
+
+  it('manages topics, previews classification, and keeps one default per tenant', async () => {
+    const sales = (
+      await request(server)
+        .post('/api/v1/departments')
+        .set('Cookie', owner)
+        .send({ name: `Sales ${randomUUID().slice(0, 6)}` })
+        .expect(201)
+    ).body as { id: string };
+    const registration = (
+      await request(server)
+        .post('/api/v1/topics')
+        .set('Cookie', owner)
+        .send({
+          name: 'Company registration',
+          departmentId: sales.id,
+          priority: 'HIGH',
+          keywords: [{ phrase: 'register' }, { phrase: 'new company', weight: 2 }],
+          examples: ['I want to start a private company'],
+        })
+        .expect(201)
+    ).body as TopicResponse;
+    expect(registration.publicId).toMatch(/^topic_/);
+    const general = (
+      await request(server)
+        .post('/api/v1/topics')
+        .set('Cookie', owner)
+        .send({ name: 'General', isDefault: true })
+        .expect(201)
+    ).body as TopicResponse;
+
+    const preview = await request(server)
+      .post('/api/v1/topics/test')
+      .set('Cookie', owner)
+      .send({ message: 'How do I register a new company?' })
+      .expect(200);
+    expect(preview.body).toMatchObject({
+      decision: 'ROUTE',
+      topic: { id: registration.id, name: 'Company registration' },
+    });
+    const unclear = await request(server)
+      .post('/api/v1/topics/test')
+      .set('Cookie', owner)
+      .send({ message: 'hello there' })
+      .expect(200);
+    expect(unclear.body).toMatchObject({ decision: 'ASK', topic: null });
+
+    // Marking another topic default clears the first, and the database allows only one.
+    await request(server)
+      .patch(`/api/v1/topics/${registration.id}`)
+      .set('Cookie', owner)
+      .send({ isDefault: true })
+      .expect(200);
+    const listed = (await request(server).get('/api/v1/topics').set('Cookie', owner).expect(200))
+      .body as TopicResponse[];
+    expect(listed.filter((topic) => topic.isDefault).map((topic) => topic.id)).toEqual([
+      registration.id,
+    ]);
+    await expect(
+      prisma.topic.update({ where: { id: general.id }, data: { isDefault: true } }),
+    ).rejects.toThrow();
+
+    await request(server)
+      .post('/api/v1/topics')
+      .set('Cookie', owner)
+      .send({ name: 'Company registration' })
+      .expect(409);
+    await request(server)
+      .put('/api/v1/routing/settings')
+      .set('Cookie', owner)
+      .send({ confirmThreshold: 0.7 })
+      .expect(400);
+  });
+
+  it('keeps topics inside their tenant', async () => {
+    const ownTopic = (await request(server).get('/api/v1/topics').set('Cookie', owner).expect(200))
+      .body as TopicResponse[];
+    const ownDepartment = (
+      await request(server).get('/api/v1/departments').set('Cookie', owner).expect(200)
+    ).body as { id: string }[];
+
+    await request(server).get('/api/v1/topics').set('Cookie', otherOwner).expect(200, []);
+    await request(server)
+      .patch(`/api/v1/topics/${ownTopic[0]!.id}`)
+      .set('Cookie', otherOwner)
+      .send({ name: 'Taken over' })
+      .expect(404);
+    await request(server)
+      .post('/api/v1/topics')
+      .set('Cookie', otherOwner)
+      .send({ name: 'Borrowed department', departmentId: ownDepartment[0]!.id })
+      .expect(404);
+  });
+
+  it('classifies conversations created through the integration API', async () => {
+    const key = (
+      await request(server)
+        .post('/api/v1/integration-settings/keys')
+        .set('Cookie', owner)
+        .send({ name: 'Topics', scopes: ['conversations:write'] })
+        .expect(201)
+    ).body as { token: string };
+    const create = (content: string): Promise<request.Response> =>
+      request(server)
+        .post('/api/v1/integrations/conversations')
+        .auth(key.token, { type: 'bearer' })
+        .set('Idempotency-Key', randomUUID())
+        .send({ externalId: `customer-${randomUUID()}`, content })
+        .expect(201);
+
+    const matched = (await create('Please help me register a new company')).body as {
+      conversation: { id: string };
+    };
+    const matchedRow = await prisma.conversation.findUniqueOrThrow({
+      where: { id: matched.conversation.id },
+      include: { topic: true, classifications: true },
+    });
+    expect(matchedRow).toMatchObject({
+      intakeStatus: 'COMPLETE',
+      priority: 'HIGH',
+      topic: { name: 'Company registration' },
+    });
+    expect(matchedRow.classifications).toEqual([
+      expect.objectContaining({ method: 'KEYWORD', decision: 'ROUTE' }),
+    ]);
+
+    // Nobody can answer a prompt over the API, so an unclear message takes the default topic.
+    const unclear = (await create('hello there')).body as { conversation: { id: string } };
+    const unclearRow = await prisma.conversation.findUniqueOrThrow({
+      where: { id: unclear.conversation.id },
+      include: { topic: true, classifications: true },
+    });
+    expect(unclearRow.intakeStatus).toBe('COMPLETE');
+    expect(unclearRow.topic?.isDefault).toBe(true);
+    expect(unclearRow.classifications).toEqual([
+      expect.objectContaining({ method: 'DEFAULT', decision: 'ASK' }),
+    ]);
   });
 });

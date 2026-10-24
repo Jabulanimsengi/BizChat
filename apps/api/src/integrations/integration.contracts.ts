@@ -43,6 +43,7 @@ export const startSchema = customerSchema
   .extend({
     content: z.string().trim().min(1).max(4000),
     departmentPublicId: z.string().max(64).optional(),
+    topicPublicId: z.string().max(64).optional(),
     subject: z.string().trim().max(240).optional(),
   })
   .strict();

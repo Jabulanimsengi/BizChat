@@ -1,6 +1,6 @@
 # Phase B: intent routing, offers, overflow, and pre-chat intake
 
-Status: **B1 and B2 implemented; B3-B5 proposed**. This document defines the design for Phase B. It builds
+Status: **B1-B3 implemented; B4-B5 proposed**. This document defines the design for Phase B. It builds
 on the Phase A routing changes (ordered, coalesced queue drains; single-instance reliability sweep;
 queue abandonment).
 
@@ -25,6 +25,27 @@ B2 as built (section 5), with these differences from the design:
   timeline event whose metadata reason is `OFFER_DECLINED`, `OFFER_EXPIRED`, or `OFFER_CANCELLED`.
   `CONVERSATION_OFFER_PENDING` and `OFFER_NOT_ACCEPTED` block transfers and replies while offered.
 - The inbox shows an offer card with a countdown; there is no alert sound yet.
+
+B3 as built (section 1), with these differences from the design:
+
+- Keywords (with weights), negative keywords, and examples are columns on `topics` (JSON and text
+  arrays) rather than separate `topic_keywords` and `topic_examples` tables. A partial unique index
+  allows one default topic per tenant.
+- A visible department picker choice skips topics entirely (no classification), instead of mapping
+  to a department's default topic. When a tenant has topics, the widget shows topic buttons and hides
+  the department picker.
+- Stemming is light suffix stripping, repeated until stable, plus one-edit typo tolerance for words
+  of five or more letters.
+- The intake decision is computed before the visitor-start transaction and applied only if the
+  message creates a new conversation. Routing returns early, and the sweep skips, while intake is
+  `AWAITING_TOPIC`; the sweep applies the default topic once `intakeExpiresAt` passes, whether or not
+  the visitor is still connected (abandonment still closes chats whose visitor left).
+- A visitor can change the topic until the chat is offered or assigned; a queued chat moves to the
+  new topic's department and priority and keeps its wait time. Afterwards the change returns
+  `TOPIC_LOCKED`.
+- The integration API accepts `topicPublicId`; otherwise it classifies the subject and first message
+  and, with nobody to ask, uses the default topic for uncertain results (method `DEFAULT`).
+- Conversations expose `topicId` and `intakeStatus`; the inbox does not show the topic name yet.
 
 ## Goal
 

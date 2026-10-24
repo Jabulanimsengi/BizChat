@@ -29,6 +29,12 @@ export const widgetStyles = `
   .department-picker { display: block; margin-top: 13px; color: #526159; font-size: 11px; font-weight: 650; }
   .department-picker span { display: block; margin-bottom: 6px; }
   .department-picker select { width: 100%; height: 38px; border: 1px solid #dce4de; border-radius: 11px; padding: 0 10px; color: #12211b; background: white; outline: none; }
+  .topic-picker { margin: 14px 0 0; padding: 12px; border: 1px solid #dce4de; border-radius: 14px; background: #f7f9f8; }
+  .topic-picker p { margin: 0 0 9px; color: #26342d; font-size: 12px; font-weight: 650; }
+  .topic-options { display: flex; flex-wrap: wrap; gap: 6px; }
+  .topic { padding: 7px 11px; border: 1px solid #c9d6ce; border-radius: 999px; background: white; color: #155f43; cursor: pointer; font-size: 12px; font-weight: 600; }
+  .topic:hover, .topic:focus-visible { border-color: #155f43; outline: none; }
+  .topic.selected { border-color: #155f43; background: #155f43; color: white; }
   .messages { list-style: none; padding: 0; margin: 18px 0 0; display: flex; flex-direction: column; gap: 10px; }
   .message { display: flex; }
   .message.outgoing { justify-content: flex-end; }

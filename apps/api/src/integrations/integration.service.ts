@@ -17,6 +17,7 @@ import {
   MESSAGE_CREATED_EVENT,
 } from '../conversations/conversation-events';
 import { CONVERSATION_CAPACITY_RELEASED_EVENT } from '../routing/routing-events';
+import { classificationRecord, TopicCatalogService } from '../intake/topic-catalog.service';
 import { CustomerIdentityService } from './customer-identity.service';
 import {
   idempotencySchema,
@@ -56,6 +57,7 @@ export class IntegrationService {
     private readonly timeline: ConversationTimelineService,
     private readonly customers: CustomerIdentityService,
     private readonly events: EventEmitter2,
+    private readonly topics: TopicCatalogService,
   ) {}
 
   public async list(principal: IntegrationPrincipal, query: PageInput): Promise<object> {
@@ -118,13 +120,27 @@ export class IntegrationService {
   ): Promise<Prisma.InputJsonValue> {
     return this.write(principal, key, 'conversation.create', input, async (tx, publish) => {
       const visitorId = await this.customers.customer(tx, principal.businessId, input.externalId);
+      // No visitor can answer a prompt here, so an uncertain classification takes the default topic.
+      const intake = input.departmentPublicId
+        ? null
+        : await this.topics.decide(
+            principal.businessId,
+            [input.subject, input.content].filter(Boolean).join('\n'),
+            {
+              ...(input.topicPublicId ? { topicPublicId: input.topicPublicId } : {}),
+              explicitMethod: 'INTEGRATION',
+              canAsk: false,
+            },
+          );
       const department = await tx.department.findFirst({
         where: {
           businessId: principal.businessId,
           status: 'ACTIVE',
           ...(input.departmentPublicId
             ? { publicId: input.departmentPublicId }
-            : { isDefault: true }),
+            : intake?.routing.departmentId
+              ? { id: intake.routing.departmentId }
+              : { isDefault: true }),
         },
       });
       if (input.departmentPublicId && !department)
@@ -139,6 +155,15 @@ export class IntegrationService {
           source: 'INTEGRATION',
           subject: input.subject,
           departmentId: department?.id,
+          ...(intake
+            ? {
+                topicId: intake.routing.topicId,
+                priority: intake.routing.priority,
+                requiredSkillId: intake.routing.requiredSkillId,
+                requiredSkillMinProficiency: intake.routing.requiredSkillMinProficiency,
+                intakeStatus: intake.intakeStatus,
+              }
+            : {}),
           participants: {
             create: {
               businessId: principal.businessId,
@@ -155,6 +180,10 @@ export class IntegrationService {
         actorType: 'INTEGRATION',
         actorId: principal.keyId,
       });
+      if (intake)
+        await tx.conversationClassification.create({
+          data: classificationRecord(principal.businessId, conversation.id, intake),
+        });
       const result = await this.messages.createInTransaction(tx, {
         businessId: principal.businessId,
         conversationId: conversation.id,

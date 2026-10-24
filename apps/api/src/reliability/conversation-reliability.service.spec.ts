@@ -9,6 +9,9 @@ describe('ConversationReliabilityService', () => {
     cancelForAgent: jest.fn().mockResolvedValue(0),
     expireDue: jest.fn().mockResolvedValue(0),
   });
+  const idleIntake = (): { expirePrompts: jest.Mock } => ({
+    expirePrompts: jest.fn().mockResolvedValue(0),
+  });
   const idleRouting = (): Record<
     'routeConversation' | 'abandonDepartedVisitors' | 'drainBusinessQueue',
     jest.Mock
@@ -44,6 +47,7 @@ describe('ConversationReliabilityService', () => {
       {} as never,
       config as never,
       offers as never,
+      idleIntake() as never,
     );
 
     const ids = await service.agentDisconnected('business-1', 'profile-1', 'membership-1');
@@ -125,6 +129,7 @@ describe('ConversationReliabilityService', () => {
       leaderRedis() as never,
       config as never,
       idleOffers() as never,
+      idleIntake() as never,
     );
 
     await service.runSweep();
@@ -154,6 +159,7 @@ describe('ConversationReliabilityService', () => {
       redis as never,
       config as never,
       idleOffers() as never,
+      idleIntake() as never,
     );
 
     await service.runSweep();
@@ -180,6 +186,7 @@ describe('ConversationReliabilityService', () => {
       { eval: jest.fn().mockRejectedValue(new Error('down')) } as never,
       config as never,
       idleOffers() as never,
+      idleIntake() as never,
     );
 
     await service.runSweep();
@@ -203,6 +210,7 @@ describe('ConversationReliabilityService', () => {
     };
     const routing = idleRouting();
     const offers = idleOffers();
+    const intake = idleIntake();
     const service = new ConversationReliabilityService(
       prisma as never,
       {} as never,
@@ -212,15 +220,23 @@ describe('ConversationReliabilityService', () => {
       leaderRedis() as never,
       config as never,
       offers as never,
+      intake as never,
     );
 
     await service.runSweep();
 
     expect(offers.expireDue).toHaveBeenCalledTimes(1);
+    expect(intake.expirePrompts).toHaveBeenCalledTimes(1);
     expect(routing.abandonDepartedVisitors).toHaveBeenCalledTimes(1);
+    // Conversations still waiting on a topic choice are not routed by the sweep.
     expect(prisma.conversation.findMany).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        where: { assignedAgentMembershipId: null, status: 'NEW', reassignmentDueAt: null },
+        where: {
+          assignedAgentMembershipId: null,
+          status: 'NEW',
+          reassignmentDueAt: null,
+          intakeStatus: { in: ['NOT_REQUIRED', 'COMPLETE'] },
+        },
         orderBy: { createdAt: 'asc' },
       }),
     );

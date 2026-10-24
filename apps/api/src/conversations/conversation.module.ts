@@ -7,9 +7,10 @@ import { MessageService } from './message.service';
 import { RoutingModule } from '../routing/routing.module';
 import { ConversationOperationsService } from './conversation-operations.service';
 import { ConversationTimelineModule } from './conversation-timeline.module';
+import { IntakeModule } from '../intake/intake.module';
 
 @Module({
-  imports: [AuthModule, RoutingModule, ConversationTimelineModule],
+  imports: [AuthModule, RoutingModule, ConversationTimelineModule, IntakeModule],
   controllers: [ConversationController],
   providers: [
     ConversationService,

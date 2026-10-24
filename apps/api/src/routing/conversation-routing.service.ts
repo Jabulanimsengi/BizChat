@@ -164,6 +164,12 @@ export class ConversationRoutingService {
       where: { id: conversationId, businessId },
     });
     if (!conversation) throw new Error('Conversation does not exist in tenant');
+    // Intake is still waiting on the visitor; IntakeService routes once it completes.
+    if (
+      conversation.intakeStatus === 'AWAITING_TOPIC' ||
+      conversation.intakeStatus === 'AWAITING_FORM'
+    )
+      return this.result(conversation, 'QUEUED');
     if (
       conversation.assignedAgentMembershipId ||
       !ROUTABLE_STATUSES.includes(conversation.status as (typeof ROUTABLE_STATUSES)[number])
