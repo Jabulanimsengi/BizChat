@@ -25,6 +25,7 @@ import {
   createSkillSchema,
   updateBusinessUserSchema,
   updateRoutingSettingsSchema,
+  offerResponseSchema,
 } from './index';
 
 describe('skill routing validation', () => {
@@ -61,6 +62,31 @@ describe('skill routing validation', () => {
     expect(updateRoutingSettingsSchema.safeParse({ routingStrategy: 'RANDOM' }).success).toBe(
       false,
     );
+  });
+
+  it('bounds offer settings and requires at least one field', () => {
+    expect(
+      updateRoutingSettingsSchema.safeParse({
+        assignmentMode: 'OFFER',
+        offerTimeoutSeconds: 10,
+        missedOffersBeforeAway: 0,
+        exclusionSeconds: 3600,
+      }).success,
+    ).toBe(true);
+    expect(updateRoutingSettingsSchema.safeParse({ offerTimeoutSeconds: 5 }).success).toBe(false);
+    expect(updateRoutingSettingsSchema.safeParse({ missedOffersBeforeAway: 11 }).success).toBe(
+      false,
+    );
+    expect(updateRoutingSettingsSchema.safeParse({ exclusionSeconds: 30 }).success).toBe(false);
+    expect(updateRoutingSettingsSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts offer responses with an optional short reason', () => {
+    expect(offerResponseSchema.safeParse({ offerId: skillId }).success).toBe(true);
+    expect(
+      offerResponseSchema.safeParse({ offerId: skillId, reason: 'x'.repeat(241) }).success,
+    ).toBe(false);
+    expect(offerResponseSchema.safeParse({ offerId: 'not-a-uuid' }).success).toBe(false);
   });
 });
 

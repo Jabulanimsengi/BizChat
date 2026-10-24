@@ -14,14 +14,16 @@ import { PrismaService } from '../database/prisma.service';
 import { PresenceService } from '../realtime/presence.service';
 import { RedisService } from '../realtime/redis.service';
 import { ACQUIRE_OR_RENEW_LEASE_SCRIPT, RELEASE_IF_HOLDER_SCRIPT } from '../realtime/redis-lock';
+import { ConversationOfferService } from '../routing/conversation-offer.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
-import { CAPACITY_STATUSES } from '../routing/routing-policy';
+import { ASSIGNED_STATUSES } from '../routing/routing-policy';
 import {
   CONVERSATION_RECOVERY_EVENT,
   type ConversationRecoveryApplicationEvent,
 } from './reliability-events';
 
-const RECOVERABLE_STATUSES = [...CAPACITY_STATUSES] as Conversation['status'][];
+// Accepted conversations get a disconnect grace period; pending offers are cancelled instead.
+const RECOVERABLE_STATUSES = [...ASSIGNED_STATUSES] as Conversation['status'][];
 const SWEEP_LEASE_KEY = 'reliability:sweep:leader';
 const SWEEP_BATCH_SIZE = 200;
 const BACKLOG_TENANTS_PER_SWEEP = 100;
@@ -44,6 +46,7 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
     private readonly events: EventEmitter2,
     private readonly redis: RedisService,
     config: ConfigService<Environment, true>,
+    private readonly offers: ConversationOfferService,
   ) {
     this.sweepIntervalMs = config.get('RELIABILITY_SWEEP_INTERVAL_MS', { infer: true });
     this.retryBaseMs = config.get('RELIABILITY_RETRY_BASE_MS', { infer: true });
@@ -69,6 +72,8 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
     membershipId: string,
   ): Promise<string[]> {
     if ((await this.presence.getAgentState(businessId, profileId)) !== 'OFFLINE') return [];
+    // Pending offers are not covered by the grace period: they move on to another consultant now.
+    await this.offers.cancelForAgent(businessId, membershipId);
     const settings = await this.prisma.widgetSettings.findUnique({
       where: { businessId },
       select: { agentDisconnectGraceSeconds: true },
@@ -177,6 +182,7 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
         orderBy: { reassignmentDueAt: 'asc' },
       });
       for (const conversation of due) await this.processDueConversation(conversation);
+      await this.offers.expireDue();
       await this.routing.abandonDepartedVisitors();
       const unrouted = await this.prisma.conversation.findMany({
         where: { assignedAgentMembershipId: null, status: 'NEW', reassignmentDueAt: null },

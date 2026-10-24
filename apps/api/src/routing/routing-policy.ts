@@ -1,10 +1,16 @@
 import type { ConversationStatus, RoutingStrategy } from '@prisma/client';
 
-export const CAPACITY_STATUSES = [
+/** Conversations a consultant has accepted (or was assigned directly). */
+export const ASSIGNED_STATUSES = [
   'ASSIGNED',
   'ACTIVE',
   'WAITING_FOR_CUSTOMER',
   'WAITING_FOR_AGENT',
+] as const satisfies readonly ConversationStatus[];
+/** A pending offer reserves capacity, so a consultant is never offered more than they can take. */
+export const CAPACITY_STATUSES = [
+  'OFFERED',
+  ...ASSIGNED_STATUSES,
 ] as const satisfies readonly ConversationStatus[];
 export const ROUTABLE_STATUSES = ['NEW', 'QUEUED'] as const satisfies readonly ConversationStatus[];
 

@@ -177,7 +177,21 @@ export const agentSkillSchema = z.object({
 });
 
 export const updateRoutingSettingsSchema = z
-  .object({ routingStrategy: z.enum(['LEAST_BUSY', 'BEST_SKILL']) })
+  .object({
+    routingStrategy: z.enum(['LEAST_BUSY', 'BEST_SKILL']).optional(),
+    assignmentMode: z.enum(['AUTO', 'OFFER']).optional(),
+    offerTimeoutSeconds: z.number().int().min(10).max(120).optional(),
+    missedOffersBeforeAway: z.number().int().min(0).max(10).optional(),
+    exclusionSeconds: z.number().int().min(60).max(3600).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+
+export const offerResponseSchema = z
+  .object({
+    offerId: z.string().uuid(),
+    reason: z.string().trim().max(240).optional(),
+  })
   .strict();
 
 const timeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
@@ -294,6 +308,7 @@ export const conversationListQuerySchema = z.object({
     .enum([
       'NEW',
       'QUEUED',
+      'OFFERED',
       'ASSIGNED',
       'ACTIVE',
       'WAITING_FOR_CUSTOMER',
@@ -432,6 +447,7 @@ export type CreateSkillInput = z.infer<typeof createSkillSchema>;
 export type UpdateSkillInput = z.infer<typeof updateSkillSchema>;
 export type AgentSkillInput = z.infer<typeof agentSkillSchema>;
 export type UpdateRoutingSettingsInput = z.infer<typeof updateRoutingSettingsSchema>;
+export type OfferResponseInput = z.infer<typeof offerResponseSchema>;
 export type UpdateBusinessHoursInput = z.infer<typeof updateBusinessHoursSchema>;
 export type CreateBusinessUserInput = z.infer<typeof createBusinessUserSchema>;
 export type UpdateBusinessUserInput = z.infer<typeof updateBusinessUserSchema>;

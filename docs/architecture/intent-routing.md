@@ -1,6 +1,6 @@
 # Phase B: intent routing, offers, overflow, and pre-chat intake
 
-Status: **B1 implemented; B2-B5 proposed**. This document defines the design for Phase B. It builds
+Status: **B1 and B2 implemented; B3-B5 proposed**. This document defines the design for Phase B. It builds
 on the Phase A routing changes (ordered, coalesced queue drains; single-instance reliability sweep;
 queue abandonment).
 
@@ -14,6 +14,17 @@ B1 as built:
 - A requirement on a disabled skill is ignored, so disabling a skill never strands a queue.
 - Changing a consultant's skills does not trigger an immediate drain; the reliability sweep drains
   within one interval.
+
+B2 as built (section 5), with these differences from the design:
+
+- New businesses get `OFFER` from `NEW_TENANT_ASSIGNMENT_MODE` (default `OFFER`); the end-to-end
+  runner sets it to `AUTO` because the Phase 3-9 harnesses exercise direct assignment.
+- Exclusions use `exclusionSeconds` only. Routing cycles (which clear exclusions) arrive with overflow
+  in B5.
+- An offer declined, expired, or cancelled returns the conversation to `QUEUED` with a `QUEUED`
+  timeline event whose metadata reason is `OFFER_DECLINED`, `OFFER_EXPIRED`, or `OFFER_CANCELLED`.
+  `CONVERSATION_OFFER_PENDING` and `OFFER_NOT_ACCEPTED` block transfers and replies while offered.
+- The inbox shows an offer card with a countdown; there is no alert sound yet.
 
 ## Goal
 

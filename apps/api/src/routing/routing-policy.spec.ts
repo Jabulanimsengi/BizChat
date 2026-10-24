@@ -20,8 +20,9 @@ describe('routing policy', () => {
     lastAssignedAt: lastAssignedAt ? new Date(lastAssignedAt) : null,
   });
 
-  it('centralizes the statuses that consume consultant capacity', () => {
+  it('centralizes the statuses that consume consultant capacity, including pending offers', () => {
     expect(CAPACITY_STATUSES).toEqual([
+      'OFFERED',
       'ASSIGNED',
       'ACTIVE',
       'WAITING_FOR_CUSTOMER',

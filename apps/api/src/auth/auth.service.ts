@@ -75,6 +75,12 @@ export class AuthService {
           },
         });
         await transaction.widgetSettings.create({ data: { businessId: business.id } });
+        await transaction.routingSettings.create({
+          data: {
+            businessId: business.id,
+            assignmentMode: this.config.get('NEW_TENANT_ASSIGNMENT_MODE', { infer: true }),
+          },
+        });
         return { business, user, membership };
       });
       await this.sendVerificationEmail(created.user.id).catch((error: unknown) => {

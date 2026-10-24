@@ -5,6 +5,10 @@ describe('ConversationReliabilityService', () => {
     get: jest.fn((key: string) => (key === 'RELIABILITY_SWEEP_INTERVAL_MS' ? 5_000 : 1_000)),
   };
   const leaderRedis = (): { eval: jest.Mock } => ({ eval: jest.fn().mockResolvedValue(1) });
+  const idleOffers = (): Record<'cancelForAgent' | 'expireDue', jest.Mock> => ({
+    cancelForAgent: jest.fn().mockResolvedValue(0),
+    expireDue: jest.fn().mockResolvedValue(0),
+  });
   const idleRouting = (): Record<
     'routeConversation' | 'abandonDepartedVisitors' | 'drainBusinessQueue',
     jest.Mock
@@ -30,6 +34,7 @@ describe('ConversationReliabilityService', () => {
         updateMany,
       },
     };
+    const offers = idleOffers();
     const service = new ConversationReliabilityService(
       prisma as never,
       { getAgentState: jest.fn().mockResolvedValue('OFFLINE') } as never,
@@ -38,11 +43,14 @@ describe('ConversationReliabilityService', () => {
       { emit } as never,
       {} as never,
       config as never,
+      offers as never,
     );
 
     const ids = await service.agentDisconnected('business-1', 'profile-1', 'membership-1');
 
     expect(ids).toEqual(['conversation-1']);
+    // Pending offers move on immediately instead of waiting out the grace period.
+    expect(offers.cancelForAgent).toHaveBeenCalledWith('business-1', 'membership-1');
     expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -116,6 +124,7 @@ describe('ConversationReliabilityService', () => {
       { emit: jest.fn() } as never,
       leaderRedis() as never,
       config as never,
+      idleOffers() as never,
     );
 
     await service.runSweep();
@@ -144,6 +153,7 @@ describe('ConversationReliabilityService', () => {
       { emit: jest.fn() } as never,
       redis as never,
       config as never,
+      idleOffers() as never,
     );
 
     await service.runSweep();
@@ -169,6 +179,7 @@ describe('ConversationReliabilityService', () => {
       { emit: jest.fn() } as never,
       { eval: jest.fn().mockRejectedValue(new Error('down')) } as never,
       config as never,
+      idleOffers() as never,
     );
 
     await service.runSweep();
@@ -191,6 +202,7 @@ describe('ConversationReliabilityService', () => {
       conversationQueueEntry: { groupBy },
     };
     const routing = idleRouting();
+    const offers = idleOffers();
     const service = new ConversationReliabilityService(
       prisma as never,
       {} as never,
@@ -199,10 +211,12 @@ describe('ConversationReliabilityService', () => {
       { emit: jest.fn() } as never,
       leaderRedis() as never,
       config as never,
+      offers as never,
     );
 
     await service.runSweep();
 
+    expect(offers.expireDue).toHaveBeenCalledTimes(1);
     expect(routing.abandonDepartedVisitors).toHaveBeenCalledTimes(1);
     expect(prisma.conversation.findMany).toHaveBeenLastCalledWith(
       expect.objectContaining({

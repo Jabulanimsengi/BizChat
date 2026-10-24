@@ -424,7 +424,9 @@ class BizChatWidgetElement extends HTMLElement {
     if (event.outcome === 'QUEUED') {
       const position = event.queuePosition ? ` You are number ${event.queuePosition}.` : '';
       this.setComposerNote(`${this.queueMessage}${position}`);
-    } else this.setComposerNote('A consultant has been assigned to your conversation.');
+    } else if (event.outcome === 'OFFERED')
+      this.setComposerNote('Connecting you with a consultant…');
+    else this.setComposerNote('A consultant has been assigned to your conversation.');
   }
 
   private async loadEarlier(): Promise<void> {

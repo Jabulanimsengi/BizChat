@@ -194,6 +194,9 @@ describe('ConversationRoutingService', () => {
     const closedRow = conversationRow();
     const transaction = {
       conversation: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ currentOfferId: null, assignedAgentMembershipId: null }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUniqueOrThrow: jest.fn().mockResolvedValue(closedRow),
       },
@@ -230,13 +233,28 @@ describe('ConversationRoutingService', () => {
       where: expect.objectContaining({
         id: 'conversation-1',
         businessId: 'business-1',
-        status: { in: ['NEW', 'QUEUED'] },
-        assignedAgentMembershipId: null,
+        currentOfferId: null,
+        AND: [
+          {
+            OR: [
+              { status: { in: ['NEW', 'QUEUED'] }, assignedAgentMembershipId: null },
+              { status: 'OFFERED' },
+            ],
+          },
+          expect.anything(),
+        ],
         visitor: {
           is: { sessions: { none: { widgetSessions: { some: { lastSeenAt: { gte: cutoff } } } } } },
         },
       }) as unknown,
-      data: { status: 'CLOSED', closedAt: expect.any(Date) as Date, reassignmentDueAt: null },
+      data: {
+        status: 'CLOSED',
+        closedAt: expect.any(Date) as Date,
+        reassignmentDueAt: null,
+        assignedAgentMembershipId: null,
+        currentOfferId: null,
+        offerExpiresAt: null,
+      },
     });
     expect(transaction.conversationQueueEntry.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: { removedAt: expect.any(Date) as Date } }),
@@ -270,7 +288,12 @@ describe('ConversationRoutingService', () => {
 
   it('keeps a visitor queued when they came back between the scan and the close', async () => {
     const transaction = {
-      conversation: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      conversation: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ currentOfferId: null, assignedAgentMembershipId: null }),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       conversationQueueEntry: { updateMany: jest.fn() },
     };
     const prisma = {
@@ -287,6 +310,61 @@ describe('ConversationRoutingService', () => {
     await expect(service.abandonDepartedVisitors()).resolves.toBe(0);
     expect(transaction.conversationQueueEntry.updateMany).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("cancels the consultant's pending offer when an offered visitor leaves", async () => {
+    const transaction = {
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue({
+          currentOfferId: 'offer-1',
+          assignedAgentMembershipId: 'membership-expert',
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(conversationRow()),
+      },
+      conversationOffer: { update: jest.fn().mockResolvedValue({}) },
+      conversationQueueEntry: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      conversationParticipant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const prisma = {
+      conversation: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([{ id: 'conversation-1', businessId: 'business-1' }])
+          .mockResolvedValueOnce([]),
+      },
+      department: { findUnique: jest.fn().mockResolvedValue(null) },
+      conversationTag: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn(async (operation: (client: typeof transaction) => Promise<unknown>) =>
+        operation(transaction),
+      ),
+    };
+    const emit = jest.fn();
+    const timeline = {
+      recordInTransaction: jest.fn().mockResolvedValue({ event: { id: 'event-1' }, message: null }),
+      serialize: jest.fn().mockReturnValue({ id: 'event-1' }),
+    };
+    const service = createService(prisma, lockingRedis(), { events: { emit }, timeline });
+
+    await expect(service.abandonDepartedVisitors()).resolves.toBe(1);
+
+    // Only the offer that was current when read is closed out.
+    expect(transaction.conversation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ currentOfferId: 'offer-1' }) as unknown,
+      }),
+    );
+    expect(transaction.conversationOffer.update).toHaveBeenCalledWith({
+      where: { id: 'offer-1' },
+      data: { outcome: 'CANCELLED', respondedAt: expect.any(Date) as Date, reason: 'VISITOR_LEFT' },
+    });
+    expect(emit).toHaveBeenCalledWith('conversation.offer_withdrawn', {
+      businessId: 'business-1',
+      agentMembershipId: 'membership-expert',
+      offerId: 'offer-1',
+      conversationId: 'conversation-1',
+      reason: 'CANCELLED',
+    });
   });
 
   it('keeps trying other skill levels after a skill scope runs out of consultants', async () => {
@@ -353,6 +431,7 @@ describe('ConversationRoutingService', () => {
         routingSettings: { findUnique: jest.fn().mockResolvedValue({ routingStrategy: strategy }) },
         skill: { findFirst: jest.fn().mockResolvedValue(skillActive ? { id: 'skill-tax' } : null) },
         agentProfile: { findMany: findProfiles },
+        conversationOffer: { findMany: jest.fn().mockResolvedValue([]) },
       };
       const service = new ConversationRoutingService(
         prisma as never,
@@ -390,6 +469,7 @@ describe('ConversationRoutingService', () => {
         expect.objectContaining({ id: 'expert', proficiency: 5 }),
         'AUTO',
         requirement,
+        null,
       );
     });
 
@@ -400,7 +480,180 @@ describe('ConversationRoutingService', () => {
 
       const where = (findProfiles.mock.calls[0] as [{ where: Record<string, unknown> }])[0].where;
       expect(where).not.toHaveProperty('skills');
-      expect(tryClaim).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'AUTO', null);
+      expect(tryClaim).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'AUTO',
+        null,
+        null,
+      );
+    });
+  });
+
+  describe('offers', () => {
+    const offeredRow = {
+      ...conversationRow({ status: 'OFFERED', visitorId: null, departmentId: null }),
+      assignedAgentMembershipId: 'membership-expert',
+      currentOfferId: 'offer-1',
+      offerExpiresAt: new Date(Date.now() + 30_000),
+      requiredSkillId: null,
+    };
+
+    it('offers instead of assigning in OFFER mode and skips consultants who recently passed', async () => {
+      const findProfiles = jest.fn().mockResolvedValue([
+        {
+          id: 'expert',
+          businessId: 'business-1',
+          membershipId: 'membership-expert',
+          userId: 'user-expert',
+          maxConcurrentChats: 5,
+          lastAssignedAt: null,
+          skills: [],
+        },
+      ]);
+      const prisma = {
+        conversation: {
+          findFirst: jest.fn().mockResolvedValue({
+            ...conversationRow({ status: 'NEW', visitorId: null, departmentId: null }),
+            requiredSkillId: null,
+          }),
+          count: jest.fn().mockResolvedValue(0),
+        },
+        widgetSettings: { findUnique: jest.fn().mockResolvedValue(null) },
+        routingSettings: {
+          findUnique: jest.fn().mockResolvedValue({
+            routingStrategy: 'LEAST_BUSY',
+            assignmentMode: 'OFFER',
+            offerTimeoutSeconds: 30,
+            exclusionSeconds: 300,
+          }),
+        },
+        agentProfile: { findMany: findProfiles },
+        conversationOffer: {
+          findMany: jest.fn().mockResolvedValue([{ agentProfileId: 'decliner' }]),
+        },
+      };
+      const emit = jest.fn();
+      const service = new ConversationRoutingService(
+        prisma as never,
+        { getAgentState: jest.fn().mockResolvedValue('ONLINE') } as never,
+        { emit } as never,
+        {} as never,
+        lockingRedis() as never,
+        config as never,
+      );
+      const internals = service as unknown as {
+        tryClaim: jest.Mock;
+        publish: jest.Mock;
+        offerEvent: jest.Mock;
+      };
+      internals.tryClaim = jest.fn().mockResolvedValue({
+        conversation: offeredRow,
+        timeline: { event: {}, message: null },
+        offerId: 'offer-1',
+      });
+      internals.publish = jest.fn().mockResolvedValue({ outcome: 'OFFERED', conversation: {} });
+      internals.offerEvent = jest.fn().mockResolvedValue({ offerId: 'offer-1' });
+
+      const routed = await service.routeConversation('business-1', 'conversation-1');
+
+      expect(routed.outcome).toBe('OFFERED');
+      expect(prisma.conversationOffer.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ outcome: { in: ['DECLINED', 'EXPIRED'] } }) as unknown,
+        }),
+      );
+      expect(findProfiles).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: { notIn: ['decliner'] } }) as unknown,
+        }),
+      );
+      const offer = (internals.tryClaim.mock.calls[0] as unknown[])[4] as { expiresAt: Date };
+      expect(offer.expiresAt.getTime() - Date.now()).toBeGreaterThan(29_000);
+      expect(internals.publish).toHaveBeenCalledWith(offeredRow, 'OFFERED');
+      expect(emit).toHaveBeenCalledWith('conversation.offered', { offerId: 'offer-1' });
+    });
+
+    it('claims an offer by reserving capacity without creating an assignment', async () => {
+      const transaction = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        agentProfile: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'expert',
+            membershipId: 'membership-expert',
+            userId: 'user-expert',
+            maxConcurrentChats: 2,
+            user: { displayName: 'Expert' },
+          }),
+          update: jest.fn().mockResolvedValue({}),
+        },
+        conversation: {
+          count: jest.fn().mockResolvedValue(1),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUniqueOrThrow: jest.fn().mockResolvedValue(offeredRow),
+        },
+        conversationQueueEntry: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        conversationOffer: { create: jest.fn().mockResolvedValue({}) },
+      };
+      const recordInTransaction = jest.fn().mockResolvedValue({ event: {}, message: null });
+      const service = createService(
+        {
+          $transaction: jest.fn(
+            async (operation: (client: typeof transaction) => Promise<unknown>) =>
+              operation(transaction),
+          ),
+        },
+        lockingRedis(),
+        { timeline: { recordInTransaction } },
+      );
+      const expiresAt = new Date(Date.now() + 30_000);
+      const tryClaim = (
+        service as unknown as {
+          tryClaim: (...args: unknown[]) => Promise<{ offerId: string | null } | null>;
+        }
+      ).tryClaim.bind(service);
+
+      const claimed = await tryClaim(
+        { ...offeredRow, status: 'QUEUED', assignedAgentMembershipId: null },
+        { id: 'expert' },
+        'AUTO',
+        null,
+        { expiresAt },
+      );
+
+      expect(claimed?.offerId).toEqual(expect.any(String));
+      expect(transaction.conversation.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            assignedAgentMembershipId: 'membership-expert',
+            status: 'OFFERED',
+            currentOfferId: claimed?.offerId,
+            offerExpiresAt: expiresAt,
+          },
+        }),
+      );
+      // Capacity counts pending offers so the consultant cannot be over-offered.
+      expect(transaction.conversation.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: { in: expect.arrayContaining(['OFFERED', 'ASSIGNED']) as unknown },
+          }) as unknown,
+        }),
+      );
+      expect(transaction.conversationOffer.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          id: claimed?.offerId,
+          agentProfileId: 'expert',
+          expiresAt,
+          assignmentType: 'AUTO',
+        }) as unknown,
+      });
+      expect(recordInTransaction).toHaveBeenCalledWith(
+        transaction,
+        expect.objectContaining({ type: 'OFFERED' }),
+      );
+      const [, offeredEvent] = recordInTransaction.mock.calls[0] as [unknown, object];
+      expect(offeredEvent).not.toHaveProperty('systemMessage');
     });
   });
 });

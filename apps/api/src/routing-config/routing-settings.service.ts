@@ -5,6 +5,23 @@ import { AuditService } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 
+/** Applies to tenants with no stored row: direct assignment, as before Phase B. */
+export const DEFAULT_ROUTING_SETTINGS: RoutingSettingsResponse = {
+  routingStrategy: 'LEAST_BUSY',
+  assignmentMode: 'AUTO',
+  offerTimeoutSeconds: 30,
+  missedOffersBeforeAway: 2,
+  exclusionSeconds: 300,
+};
+
+const settingsSelect = {
+  routingStrategy: true,
+  assignmentMode: true,
+  offerTimeoutSeconds: true,
+  missedOffersBeforeAway: true,
+  exclusionSeconds: true,
+} as const;
+
 @Injectable()
 export class RoutingSettingsService {
   public constructor(
@@ -16,9 +33,9 @@ export class RoutingSettingsService {
   public async get(auth: AuthContext): Promise<RoutingSettingsResponse> {
     const settings = await this.prisma.routingSettings.findUnique({
       where: { businessId: auth.business.id },
-      select: { routingStrategy: true },
+      select: settingsSelect,
     });
-    return { routingStrategy: settings?.routingStrategy ?? 'LEAST_BUSY' };
+    return settings ?? DEFAULT_ROUTING_SETTINGS;
   }
 
   public async update(
@@ -30,8 +47,8 @@ export class RoutingSettingsService {
     const settings = await this.prisma.routingSettings.upsert({
       where: { businessId: auth.business.id },
       update: input,
-      create: { businessId: auth.business.id, ...input },
-      select: { routingStrategy: true },
+      create: { ...DEFAULT_ROUTING_SETTINGS, ...input, businessId: auth.business.id },
+      select: settingsSelect,
     });
     await this.audit.record({
       businessId: auth.business.id,

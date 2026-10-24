@@ -60,11 +60,21 @@ import { ConversationRoutingService } from '../routing/conversation-routing.serv
 const OPEN_VISITOR_STATUSES = [
   'NEW',
   'QUEUED',
+  'OFFERED',
   'ASSIGNED',
   'ACTIVE',
   'WAITING_FOR_CUSTOMER',
   'WAITING_FOR_AGENT',
 ] as const;
+
+/** A consultant can preview an offered conversation but must accept before replying. */
+function assertNotOffered(conversation: Conversation): void {
+  if (conversation.status === 'OFFERED')
+    throw new ConflictException({
+      code: 'OFFER_NOT_ACCEPTED',
+      message: 'Accept this chat before replying',
+    });
+}
 
 interface VisitorIdentity {
   businessId: string;
@@ -392,6 +402,7 @@ export class ConversationService {
     input: AgentMessageSendInput,
   ): Promise<MessageResponse> {
     let conversation = await this.findDashboardConversation(auth, conversationId);
+    assertNotOffered(conversation);
     if (conversation.status === 'ASSIGNED') {
       conversation = await this.prisma.$transaction(async (transaction) => {
         const updated = await transaction.conversation.update({
@@ -443,6 +454,7 @@ export class ConversationService {
     input: AttachmentMessageCommand,
   ): Promise<AttachmentSendResult> {
     let conversation = await this.findDashboardConversation(auth, conversationId);
+    assertNotOffered(conversation);
     if (conversation.status === 'ASSIGNED') {
       conversation = await this.prisma.$transaction(async (transaction) => {
         const updated = await transaction.conversation.update({

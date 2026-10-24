@@ -38,12 +38,22 @@ import {
 } from './routing-policy';
 import {
   CONVERSATION_CAPACITY_RELEASED_EVENT,
+  CONVERSATION_OFFER_WITHDRAWN_EVENT,
+  CONVERSATION_OFFERED_EVENT,
   CONVERSATION_ROUTED_EVENT,
   type ConversationCapacityReleasedApplicationEvent,
+  type ConversationOfferedApplicationEvent,
+  type ConversationOfferWithdrawnApplicationEvent,
   type ConversationRoutedApplicationEvent,
 } from './routing-events';
 
 type CandidateProfile = AgentProfile & { membership: { status: string }; user: { status: string } };
+type RoutingOutcome = ConversationRoutingEvent['outcome'];
+
+function outcomeOf(conversation: Conversation): RoutingOutcome {
+  if (conversation.status === 'OFFERED') return 'OFFERED';
+  return conversation.assignedAgentMembershipId ? 'ASSIGNED' : 'QUEUED';
+}
 interface SkillRequirement {
   skillId: string;
   minProficiency: number;
@@ -53,8 +63,10 @@ interface SkillRequirement {
 function eligibleProfileWhere(
   conversation: Conversation,
   requirement: SkillRequirement | null,
+  excludedProfileIds: string[] = [],
 ): Prisma.AgentProfileWhereInput {
   return {
+    ...(excludedProfileIds.length ? { id: { notIn: excludedProfileIds } } : {}),
     businessId: conversation.businessId,
     status: 'ACTIVE',
     routingEnabled: true,
@@ -88,10 +100,18 @@ const ABANDON_BATCH_SIZE = 200;
  */
 function departedVisitorWhere(cutoff: Date): Prisma.ConversationWhereInput {
   return {
-    status: { in: [...ROUTABLE_STATUSES] },
-    assignedAgentMembershipId: null,
+    AND: [
+      {
+        OR: [
+          { status: { in: [...ROUTABLE_STATUSES] }, assignedAgentMembershipId: null },
+          { status: 'OFFERED' },
+        ],
+      },
+      {
+        OR: [{ lastMessageAt: { lt: cutoff } }, { lastMessageAt: null, createdAt: { lt: cutoff } }],
+      },
+    ],
     source: 'WEB_WIDGET',
-    OR: [{ lastMessageAt: { lt: cutoff } }, { lastMessageAt: null, createdAt: { lt: cutoff } }],
     visitor: {
       is: { sessions: { none: { widgetSessions: { some: { lastSeenAt: { gte: cutoff } } } } } },
     },
@@ -148,10 +168,7 @@ export class ConversationRoutingService {
       conversation.assignedAgentMembershipId ||
       !ROUTABLE_STATUSES.includes(conversation.status as (typeof ROUTABLE_STATUSES)[number])
     ) {
-      return this.result(
-        conversation,
-        conversation.assignedAgentMembershipId ? 'ASSIGNED' : 'QUEUED',
-      );
+      return this.result(conversation, outcomeOf(conversation));
     }
 
     const settings = await this.prisma.widgetSettings.findUnique({
@@ -182,28 +199,139 @@ export class ConversationRoutingService {
       : null;
     const routing = await this.prisma.routingSettings.findUnique({
       where: { businessId },
-      select: { routingStrategy: true },
+      select: {
+        routingStrategy: true,
+        assignmentMode: true,
+        offerTimeoutSeconds: true,
+        exclusionSeconds: true,
+      },
     });
     const requirement = await this.skillRequirement(conversation);
-    const candidates = await this.eligibleCandidates(conversation, requirement);
+    const excluded = await this.recentlyRefusedBy(
+      conversation.id,
+      routing?.exclusionSeconds ?? 300,
+    );
+    const candidates = await this.eligibleCandidates(conversation, requirement, excluded);
     for (const candidate of orderCandidates(
       candidates,
       previous?.assignedAgentMembershipId ?? previousAssignment?.agentProfile.membershipId ?? null,
       routing?.routingStrategy ?? 'LEAST_BUSY',
     )) {
-      const assigned = await this.tryClaim(
+      const offer =
+        routing?.assignmentMode === 'OFFER'
+          ? { expiresAt: new Date(Date.now() + routing.offerTimeoutSeconds * 1_000) }
+          : null;
+      const claimed = await this.tryClaim(
         conversation,
         candidate,
         options.assignmentType ?? 'AUTO',
         requirement,
+        offer,
       );
-      if (assigned) {
-        if (assigned.timeline.message)
-          this.publishTimelineMessage(assigned.timeline.message, assigned.conversation.visitorId);
-        return this.publish(assigned.conversation, 'ASSIGNED');
-      }
+      if (!claimed) continue;
+      if (claimed.timeline.message)
+        this.publishTimelineMessage(claimed.timeline.message, claimed.conversation.visitorId);
+      if (!claimed.offerId) return this.publish(claimed.conversation, 'ASSIGNED');
+      const routed = await this.publish(claimed.conversation, 'OFFERED');
+      this.events.emit(
+        CONVERSATION_OFFERED_EVENT,
+        await this.offerEvent(claimed.conversation, routed.conversation),
+      );
+      return routed;
     }
     return this.queue(conversation);
+  }
+
+  /** The realtime payload for a pending offer, used when offering and when a consultant reconnects. */
+  public async offerEvent(
+    conversation: Conversation,
+    response?: ConversationResponse,
+  ): Promise<ConversationOfferedApplicationEvent> {
+    if (
+      conversation.status !== 'OFFERED' ||
+      !conversation.currentOfferId ||
+      !conversation.offerExpiresAt ||
+      !conversation.assignedAgentMembershipId
+    )
+      throw new Error(`Conversation ${conversation.id} has no pending offer`);
+    const [offer, first] = await Promise.all([
+      this.prisma.conversationOffer.findUniqueOrThrow({
+        where: { id: conversation.currentOfferId },
+        select: { offeredAt: true },
+      }),
+      this.prisma.message.findFirst({
+        where: {
+          conversationId: conversation.id,
+          senderType: { in: ['VISITOR', 'CUSTOMER', 'INTEGRATION'] },
+          deletedAt: null,
+        },
+        orderBy: { sequenceNumber: 'asc' },
+        select: { content: true },
+      }),
+    ]);
+    return {
+      businessId: conversation.businessId,
+      agentMembershipId: conversation.assignedAgentMembershipId,
+      offerId: conversation.currentOfferId,
+      conversation: response ?? (await this.conversationResponse(conversation, null, null)),
+      firstMessage: first?.content ?? null,
+      offeredAt: offer.offeredAt.toISOString(),
+      expiresAt: conversation.offerExpiresAt.toISOString(),
+    };
+  }
+
+  /**
+   * Creates the assignment record, consultant participant, and visitor-visible "assigned" message.
+   * Shared by direct assignment and by accepting an offer.
+   */
+  public async recordAssignmentInTransaction(
+    transaction: Prisma.TransactionClient,
+    conversation: Pick<Conversation, 'id' | 'businessId' | 'departmentId'>,
+    agent: { id: string; membershipId: string; userId: string; displayName: string },
+    assignmentType: AssignmentType,
+    assignedAt: Date,
+  ): Promise<{
+    event: ConversationEvent;
+    message: (Message & { receipts: MessageReceipt[] }) | null;
+  }> {
+    await transaction.conversationAssignment.create({
+      data: {
+        businessId: conversation.businessId,
+        conversationId: conversation.id,
+        agentProfileId: agent.id,
+        departmentId: conversation.departmentId,
+        assignmentType,
+        assignedAt,
+      },
+    });
+    await transaction.conversationParticipant.upsert({
+      where: {
+        conversationId_participantType_participantId: {
+          conversationId: conversation.id,
+          participantType: 'AGENT',
+          participantId: agent.userId,
+        },
+      },
+      update: { leftAt: null },
+      create: {
+        businessId: conversation.businessId,
+        conversationId: conversation.id,
+        participantType: 'AGENT',
+        participantId: agent.userId,
+      },
+    });
+    return this.timeline.recordInTransaction(transaction, {
+      businessId: conversation.businessId,
+      conversationId: conversation.id,
+      type: 'ASSIGNED',
+      actorType: 'SYSTEM',
+      metadata: {
+        agentProfileId: agent.id,
+        agentMembershipId: agent.membershipId,
+        agentName: agent.displayName,
+      },
+      systemMessage: `Conversation assigned to ${agent.displayName}.`,
+    });
   }
 
   /**
@@ -296,7 +424,7 @@ export class ConversationRoutingService {
       };
       if (!scopes.shouldAttempt(scope)) continue;
       const result = await this.routeConversation(businessId, entry.conversationId);
-      if (result.outcome === 'ASSIGNED') {
+      if (result.outcome !== 'QUEUED') {
         assigned += 1;
         scopes.recordAssigned(entry.departmentId);
       } else if (result.conversation.status === 'QUEUED') {
@@ -336,12 +464,35 @@ export class ConversationRoutingService {
   ): Promise<Conversation | null> {
     const outcome = await this.prisma.$transaction(async (transaction) => {
       const closedAt = new Date();
-      // Re-applying the departure filter makes a visitor who returned since the scan keep their place.
+      const before = await transaction.conversation.findFirst({
+        where: { id: conversationId, businessId },
+        select: { currentOfferId: true, assignedAgentMembershipId: true },
+      });
+      if (!before) return null;
+      // Re-applying the departure filter makes a visitor who returned since the scan keep their place;
+      // matching the offer ID means an offer accepted or replaced since the read is left alone.
       const closed = await transaction.conversation.updateMany({
-        where: { id: conversationId, businessId, ...departedVisitorWhere(cutoff) },
-        data: { status: 'CLOSED', closedAt, reassignmentDueAt: null },
+        where: {
+          id: conversationId,
+          businessId,
+          currentOfferId: before.currentOfferId,
+          ...departedVisitorWhere(cutoff),
+        },
+        data: {
+          status: 'CLOSED',
+          closedAt,
+          reassignmentDueAt: null,
+          assignedAgentMembershipId: null,
+          currentOfferId: null,
+          offerExpiresAt: null,
+        },
       });
       if (closed.count !== 1) return null;
+      if (before.currentOfferId)
+        await transaction.conversationOffer.update({
+          where: { id: before.currentOfferId },
+          data: { outcome: 'CANCELLED', respondedAt: closedAt, reason: 'VISITOR_LEFT' },
+        });
       await transaction.conversationQueueEntry.updateMany({
         where: { conversationId, assignedAt: null, removedAt: null },
         data: { removedAt: closedAt },
@@ -362,9 +513,24 @@ export class ConversationRoutingService {
           where: { id: conversationId },
         }),
         event: timeline.event,
+        withdrawnOffer:
+          before.currentOfferId && before.assignedAgentMembershipId
+            ? {
+                offerId: before.currentOfferId,
+                agentMembershipId: before.assignedAgentMembershipId,
+              }
+            : null,
       };
     });
     if (!outcome) return null;
+    if (outcome.withdrawnOffer)
+      this.events.emit(CONVERSATION_OFFER_WITHDRAWN_EVENT, {
+        businessId,
+        agentMembershipId: outcome.withdrawnOffer.agentMembershipId,
+        offerId: outcome.withdrawnOffer.offerId,
+        conversationId,
+        reason: 'CANCELLED',
+      } satisfies ConversationOfferWithdrawnApplicationEvent);
     this.events.emit(CONVERSATION_OPERATION_EVENT, {
       businessId,
       visitorId: outcome.conversation.visitorId,
@@ -399,9 +565,10 @@ export class ConversationRoutingService {
   private async eligibleCandidates(
     conversation: Conversation,
     requirement: SkillRequirement | null,
+    excludedProfileIds: string[],
   ): Promise<(CandidateProfile & { activeChats: number; proficiency?: number })[]> {
     const profiles = await this.prisma.agentProfile.findMany({
-      where: eligibleProfileWhere(conversation, requirement),
+      where: eligibleProfileWhere(conversation, requirement, excludedProfileIds),
       include: {
         membership: { select: { status: true } },
         user: { select: { status: true } },
@@ -431,23 +598,29 @@ export class ConversationRoutingService {
       }));
   }
 
+  /**
+   * Atomically gives a conversation to one consultant: assigned directly, or (with `offer`) held as
+   * an offer that reserves their capacity until they accept or it expires.
+   */
   private async tryClaim(
     conversation: Conversation,
     candidate: CandidateProfile,
     assignmentType: AssignmentType,
     requirement: SkillRequirement | null,
+    offer: { expiresAt: Date } | null = null,
   ): Promise<{
     conversation: Conversation;
     timeline: {
       event: ConversationEvent;
       message: (Message & { receipts: MessageReceipt[] }) | null;
     };
+    offerId: string | null;
   } | null> {
     return this.prisma.$transaction(async (transaction) => {
       const lockKey = `routing-capacity:${conversation.businessId}:${candidate.id}`;
       await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) IS NULL AS acquired`;
       const currentCandidate = await transaction.agentProfile.findFirst({
-        where: { id: candidate.id, ...eligibleProfileWhere(conversation, requirement) },
+        where: { ...eligibleProfileWhere(conversation, requirement), id: candidate.id },
         include: { user: { select: { displayName: true } } },
       });
       if (
@@ -460,6 +633,7 @@ export class ConversationRoutingService {
       )
         return null;
       const now = new Date();
+      const offerId = offer ? randomUUID() : null;
       const claimed = await transaction.conversation.updateMany({
         where: {
           id: conversation.id,
@@ -467,66 +641,95 @@ export class ConversationRoutingService {
           assignedAgentMembershipId: null,
           status: { in: [...ROUTABLE_STATUSES] },
         },
-        data: {
-          assignedAgentMembershipId: currentCandidate.membershipId,
-          status: 'ASSIGNED',
-          assignedAt: now,
-        },
+        data: offer
+          ? {
+              assignedAgentMembershipId: currentCandidate.membershipId,
+              status: 'OFFERED',
+              currentOfferId: offerId,
+              offerExpiresAt: offer.expiresAt,
+            }
+          : {
+              assignedAgentMembershipId: currentCandidate.membershipId,
+              status: 'ASSIGNED',
+              assignedAt: now,
+            },
       });
       if (claimed.count !== 1) return null;
+      // An offer counts as a turn for fairness, so a consultant who declines is not offered next.
       await transaction.agentProfile.update({
         where: { id: currentCandidate.id },
         data: { lastAssignedAt: now },
-      });
-      await transaction.conversationAssignment.create({
-        data: {
-          businessId: conversation.businessId,
-          conversationId: conversation.id,
-          agentProfileId: currentCandidate.id,
-          departmentId: conversation.departmentId,
-          assignmentType,
-          assignedAt: now,
-        },
-      });
-      await transaction.conversationParticipant.upsert({
-        where: {
-          conversationId_participantType_participantId: {
-            conversationId: conversation.id,
-            participantType: 'AGENT',
-            participantId: currentCandidate.userId,
-          },
-        },
-        update: { leftAt: null },
-        create: {
-          businessId: conversation.businessId,
-          conversationId: conversation.id,
-          participantType: 'AGENT',
-          participantId: currentCandidate.userId,
-        },
       });
       await transaction.conversationQueueEntry.updateMany({
         where: { conversationId: conversation.id, assignedAt: null },
         data: { assignedAt: now },
       });
-      const timeline = await this.timeline.recordInTransaction(transaction, {
-        businessId: conversation.businessId,
-        conversationId: conversation.id,
-        type: 'ASSIGNED',
-        actorType: 'SYSTEM',
-        metadata: {
-          agentProfileId: currentCandidate.id,
-          agentMembershipId: currentCandidate.membershipId,
-          agentName: currentCandidate.user.displayName,
-        },
-        systemMessage: `Conversation assigned to ${currentCandidate.user.displayName}.`,
-      });
+      const agent = {
+        id: currentCandidate.id,
+        membershipId: currentCandidate.membershipId,
+        userId: currentCandidate.userId,
+        displayName: currentCandidate.user.displayName,
+      };
+      let timeline;
+      if (offer && offerId) {
+        await transaction.conversationOffer.create({
+          data: {
+            id: offerId,
+            businessId: conversation.businessId,
+            conversationId: conversation.id,
+            agentProfileId: agent.id,
+            offeredAt: now,
+            expiresAt: offer.expiresAt,
+            assignmentType,
+          },
+        });
+        timeline = await this.timeline.recordInTransaction(transaction, {
+          businessId: conversation.businessId,
+          conversationId: conversation.id,
+          type: 'OFFERED',
+          actorType: 'SYSTEM',
+          metadata: {
+            offerId,
+            agentProfileId: agent.id,
+            agentMembershipId: agent.membershipId,
+            agentName: agent.displayName,
+            expiresAt: offer.expiresAt.toISOString(),
+          },
+        });
+      } else {
+        timeline = await this.recordAssignmentInTransaction(
+          transaction,
+          conversation,
+          agent,
+          assignmentType,
+          now,
+        );
+      }
       return {
         conversation: await transaction.conversation.findUniqueOrThrow({
           where: { id: conversation.id },
         }),
         timeline,
+        offerId,
       };
     });
+  }
+
+  /** Consultants who declined or missed this conversation recently are skipped. */
+  private async recentlyRefusedBy(
+    conversationId: string,
+    exclusionSeconds: number,
+  ): Promise<string[]> {
+    const refused = await this.prisma.conversationOffer.findMany({
+      where: {
+        conversationId,
+        outcome: { in: ['DECLINED', 'EXPIRED'] },
+        respondedAt: { gte: new Date(Date.now() - exclusionSeconds * 1_000) },
+      },
+      select: { agentProfileId: true },
+      distinct: ['agentProfileId'],
+    });
+    return refused.map(({ agentProfileId }) => agentProfileId);
   }
 
   private async queue(conversation: Conversation): Promise<ConversationRoutingEvent> {
@@ -543,7 +746,7 @@ export class ConversationRoutingService {
       const current = await transaction.conversation.findUniqueOrThrow({
         where: { id: conversation.id },
       });
-      if (current.assignedAgentMembershipId) return current;
+      if (current.assignedAgentMembershipId || current.status !== 'QUEUED') return current;
       await transaction.conversationQueueEntry.upsert({
         where: { conversationId: conversation.id },
         update: {
@@ -571,7 +774,7 @@ export class ConversationRoutingService {
         });
       return current;
     });
-    return this.publish(queued, queued.assignedAgentMembershipId ? 'ASSIGNED' : 'QUEUED');
+    return this.publish(queued, outcomeOf(queued));
   }
 
   private async capacity(
@@ -590,7 +793,7 @@ export class ConversationRoutingService {
 
   private async result(
     conversation: Conversation,
-    outcome: 'ASSIGNED' | 'QUEUED',
+    outcome: RoutingOutcome,
   ): Promise<ConversationRoutingEvent> {
     const queue =
       outcome === 'QUEUED'
@@ -645,9 +848,9 @@ export class ConversationRoutingService {
     };
   }
 
-  private async publish(
+  public async publish(
     conversation: Conversation,
-    outcome: 'ASSIGNED' | 'QUEUED',
+    outcome: RoutingOutcome,
   ): Promise<ConversationRoutingEvent> {
     const result = await this.result(conversation, outcome);
     this.events.emit(CONVERSATION_ROUTED_EVENT, {
@@ -677,7 +880,7 @@ export class ConversationRoutingService {
     return ahead + 1;
   }
 
-  private publishTimelineMessage(
+  public publishTimelineMessage(
     message: Message & { receipts?: MessageReceipt[] },
     visitorId: string | null,
   ): void {

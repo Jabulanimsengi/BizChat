@@ -62,17 +62,24 @@ describe('routing configuration', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it('defaults routing to least busy for tenants without stored settings', async () => {
+  it('keeps tenants without stored settings on direct, least-busy assignment', async () => {
     const service = new RoutingSettingsService(
       { routingSettings: { findUnique: jest.fn().mockResolvedValue(null) } } as never,
       { record: jest.fn() } as never,
     );
 
-    await expect(service.get(auth)).resolves.toEqual({ routingStrategy: 'LEAST_BUSY' });
+    await expect(service.get(auth)).resolves.toEqual({
+      routingStrategy: 'LEAST_BUSY',
+      assignmentMode: 'AUTO',
+      offerTimeoutSeconds: 30,
+      missedOffersBeforeAway: 2,
+      exclusionSeconds: 300,
+    });
   });
 
-  it('stores the routing strategy per tenant and audits it', async () => {
-    const upsert = jest.fn().mockResolvedValue({ routingStrategy: 'BEST_SKILL' });
+  it('stores routing settings per tenant, filling unspecified fields with defaults, and audits', async () => {
+    const stored = { routingStrategy: 'BEST_SKILL', assignmentMode: 'OFFER' };
+    const upsert = jest.fn().mockResolvedValue(stored);
     const record = jest.fn().mockResolvedValue(undefined);
     const service = new RoutingSettingsService(
       { routingSettings: { upsert } } as never,
@@ -80,12 +87,20 @@ describe('routing configuration', () => {
     );
 
     await expect(
-      service.update(auth, { routingStrategy: 'BEST_SKILL' }, 'request-1'),
-    ).resolves.toEqual({ routingStrategy: 'BEST_SKILL' });
+      service.update(auth, { routingStrategy: 'BEST_SKILL', assignmentMode: 'OFFER' }, 'request-1'),
+    ).resolves.toEqual(stored);
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { businessId: 'business-1' },
-        create: { businessId: 'business-1', routingStrategy: 'BEST_SKILL' },
+        update: { routingStrategy: 'BEST_SKILL', assignmentMode: 'OFFER' },
+        create: {
+          businessId: 'business-1',
+          routingStrategy: 'BEST_SKILL',
+          assignmentMode: 'OFFER',
+          offerTimeoutSeconds: 30,
+          missedOffersBeforeAway: 2,
+          exclusionSeconds: 300,
+        },
       }),
     );
     expect(record).toHaveBeenCalledWith(

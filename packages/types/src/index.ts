@@ -91,8 +91,34 @@ export interface AgentSkillResponse {
 }
 
 export type RoutingStrategy = 'LEAST_BUSY' | 'BEST_SKILL';
+export type AssignmentMode = 'AUTO' | 'OFFER';
 export interface RoutingSettingsResponse {
   routingStrategy: RoutingStrategy;
+  assignmentMode: AssignmentMode;
+  offerTimeoutSeconds: number;
+  /** Consecutive missed offers before a consultant is set away; 0 disables. */
+  missedOffersBeforeAway: number;
+  exclusionSeconds: number;
+}
+
+/** A conversation offered to one consultant, who must accept before `expiresAt`. */
+export interface ConversationOfferEvent {
+  offerId: string;
+  conversation: ConversationResponse;
+  firstMessage: string | null;
+  offeredAt: string;
+  expiresAt: string;
+}
+
+export interface ConversationOfferWithdrawnEvent {
+  offerId: string;
+  conversationId: string;
+  reason: 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'CANCELLED';
+}
+
+export interface AgentNoticeEvent {
+  code: 'SET_AWAY_AFTER_MISSED_OFFERS';
+  message: string;
 }
 
 export interface AuditLogResponse {
@@ -158,6 +184,7 @@ export interface WidgetConnectedEvent {
 export type ConversationStatus =
   | 'NEW'
   | 'QUEUED'
+  | 'OFFERED'
   | 'ASSIGNED'
   | 'ACTIVE'
   | 'WAITING_FOR_CUSTOMER'
@@ -251,7 +278,7 @@ export interface BusinessAvailabilityEvent {
 
 export interface ConversationRoutingEvent {
   conversation: ConversationResponse;
-  outcome: 'ASSIGNED' | 'QUEUED';
+  outcome: 'ASSIGNED' | 'QUEUED' | 'OFFERED';
   assignedAgentMembershipId: string | null;
   queuedAt: string | null;
   queuePosition: number | null;
@@ -282,7 +309,8 @@ export type ConversationEventType =
   | 'AGENT_JOINED'
   | 'AGENT_LEFT'
   | 'TAGS_CHANGED'
-  | 'INTERNAL_NOTE_ADDED';
+  | 'INTERNAL_NOTE_ADDED'
+  | 'OFFERED';
 
 export interface ConversationEventResponse {
   id: string;

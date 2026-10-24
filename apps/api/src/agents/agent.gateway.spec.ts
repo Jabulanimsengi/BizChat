@@ -30,6 +30,7 @@ describe('AgentGateway heartbeat', () => {
       routing as never,
       {} as never,
       config as never,
+      {} as never,
     );
     return { gateway, routing };
   };

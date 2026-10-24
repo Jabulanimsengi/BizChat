@@ -192,6 +192,7 @@ export const integrationOpenApi = {
             enum: [
               'NEW',
               'QUEUED',
+              'OFFERED',
               'ASSIGNED',
               'ACTIVE',
               'WAITING_FOR_CUSTOMER',

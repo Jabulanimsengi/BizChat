@@ -38,6 +38,8 @@ const environmentSchema = z
     RELIABILITY_SWEEP_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(5_000),
     RELIABILITY_RETRY_BASE_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
     QUEUE_ABANDON_AFTER_SECONDS: z.coerce.number().int().min(30).max(3_600).default(120),
+    // Assignment mode stored for newly registered businesses; existing ones keep theirs.
+    NEW_TENANT_ASSIGNMENT_MODE: z.enum(['AUTO', 'OFFER']).default('OFFER'),
     SOCKET_REDIS_ADAPTER_ENABLED: z
       .enum(['true', 'false'])
       .default('true')

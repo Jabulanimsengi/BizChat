@@ -71,6 +71,11 @@ export class ConversationOperationsService {
         code: 'CONVERSATION_NOT_ASSIGNED',
         message: 'Only assigned conversations can be transferred',
       });
+    if (initial.status === 'OFFERED')
+      throw new ConflictException({
+        code: 'CONVERSATION_OFFER_PENDING',
+        message: 'Wait until the consultant accepts or the offer expires',
+      });
     const expected = input.expectedAssignedAgentMembershipId ?? initial.assignedAgentMembershipId;
     if (input.agentProfileId)
       return this.transferToAgent(auth, initial, expected, input.agentProfileId, input.reason);

@@ -14,7 +14,10 @@ import {
 import type { Server, Socket } from 'socket.io';
 import type {
   AgentConnectedEvent,
+  AgentNoticeEvent,
   AgentPresenceEvent,
+  ConversationOfferEvent,
+  ConversationOfferWithdrawnEvent,
   ConversationRecoveryEvent,
   ConversationSessionResponse,
   ConversationOperationEvent,
@@ -31,6 +34,7 @@ import {
   messageReadSchema,
   messageReceiptSchema,
   messageSendSchema,
+  offerResponseSchema,
   typingUpdateSchema,
 } from '@bizchat/validation';
 import { roleHasPermission } from '../auth/rbac';
@@ -60,9 +64,16 @@ import {
 import { PresenceService } from '../realtime/presence.service';
 import { TypingService } from '../realtime/typing.service';
 import { AgentProfileService } from './agent-profile.service';
+import { ConversationOfferService } from '../routing/conversation-offer.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
 import {
+  AGENT_SET_AWAY_EVENT,
+  CONVERSATION_OFFER_WITHDRAWN_EVENT,
+  CONVERSATION_OFFERED_EVENT,
   CONVERSATION_ROUTED_EVENT,
+  type AgentSetAwayApplicationEvent,
+  type ConversationOfferedApplicationEvent,
+  type ConversationOfferWithdrawnApplicationEvent,
   type ConversationRoutedApplicationEvent,
 } from '../routing/routing-events';
 import { ConversationReliabilityService } from '../reliability/conversation-reliability.service';
@@ -84,6 +95,7 @@ interface AgentDirectServerEvents {
   'conversation.assigned': (event: ConversationRoutingEvent) => void;
   'conversation.transferred': (event: ConversationOperationEvent) => void;
   'conversation.recovery': (event: ConversationRecoveryEvent) => void;
+  'conversation.offered': (event: ConversationOfferEvent) => void;
 }
 type AgentSocket = Socket<
   Record<string, never>,
@@ -113,6 +125,7 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly routing: ConversationRoutingService,
     private readonly reliability: ConversationReliabilityService,
     config: ConfigService<Environment, true>,
+    private readonly offers: ConversationOfferService,
   ) {
     this.allowedOrigins = new Set([
       config.get('DASHBOARD_URL', { infer: true }),
@@ -155,6 +168,9 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
         restoredConversationIds,
       };
       client.emit('agent.connected', payload);
+      // A refreshed dashboard must still see offers that were made while it was reconnecting.
+      for (const offer of await this.offers.pendingFor(auth.business.id, auth.membership.id))
+        client.emit('conversation.offered', offer);
       void this.routing.drainForAgent(auth.business.id, profile.id);
     } catch (error) {
       this.logger.warn(
@@ -211,6 +227,46 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (event.state === 'ONLINE' && previousState !== 'ONLINE')
         void this.routing.drainForAgent(client.data.auth.business.id, client.data.profileId);
       acknowledge({ ok: true, data: { serverTime: new Date().toISOString(), presence: event } });
+    } catch (error) {
+      acknowledge(this.failure(error));
+    }
+  }
+
+  @SubscribeMessage('offer.accept')
+  public async acceptOffer(
+    @ConnectedSocket() client: AgentSocket,
+    @MessageBody() input: unknown,
+    @Ack() acknowledge: Acknowledger<ConversationRoutingEvent>,
+  ): Promise<void> {
+    const parsed = offerResponseSchema.safeParse(input);
+    if (!parsed.success) {
+      acknowledge(validationFailure(parsed.error.flatten()));
+      return;
+    }
+    try {
+      acknowledge({
+        ok: true,
+        data: await this.offers.accept(client.data.auth, parsed.data.offerId),
+      });
+    } catch (error) {
+      acknowledge(this.failure(error));
+    }
+  }
+
+  @SubscribeMessage('offer.decline')
+  public async declineOffer(
+    @ConnectedSocket() client: AgentSocket,
+    @MessageBody() input: unknown,
+    @Ack() acknowledge: Acknowledger<{ offerId: string }>,
+  ): Promise<void> {
+    const parsed = offerResponseSchema.safeParse(input);
+    if (!parsed.success) {
+      acknowledge(validationFailure(parsed.error.flatten()));
+      return;
+    }
+    try {
+      await this.offers.decline(client.data.auth, parsed.data.offerId, parsed.data.reason);
+      acknowledge({ ok: true, data: { offerId: parsed.data.offerId } });
     } catch (error) {
       acknowledge(this.failure(error));
     }
@@ -422,6 +478,40 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
         .emit('conversation.assigned', event);
     }
   }
+  @OnEvent(CONVERSATION_OFFERED_EVENT)
+  public conversationOffered({
+    businessId,
+    agentMembershipId,
+    ...offer
+  }: ConversationOfferedApplicationEvent): void {
+    this.server
+      .to(this.agentRoom(businessId, agentMembershipId))
+      .emit('conversation.offered', offer);
+  }
+
+  @OnEvent(CONVERSATION_OFFER_WITHDRAWN_EVENT)
+  public offerWithdrawn({
+    businessId,
+    agentMembershipId,
+    ...withdrawn
+  }: ConversationOfferWithdrawnApplicationEvent): void {
+    this.server
+      .to(this.agentRoom(businessId, agentMembershipId))
+      .emit('conversation.offer.withdrawn', withdrawn satisfies ConversationOfferWithdrawnEvent);
+  }
+
+  @OnEvent(AGENT_SET_AWAY_EVENT, { async: true })
+  public async agentSetAway(event: AgentSetAwayApplicationEvent): Promise<void> {
+    this.publishPresence(
+      event.businessId,
+      await this.profiles.presenceEventFor(event.agentProfileId),
+    );
+    this.server.to(this.agentRoom(event.businessId, event.agentMembershipId)).emit('agent.notice', {
+      code: 'SET_AWAY_AFTER_MISSED_OFFERS',
+      message: event.message,
+    } satisfies AgentNoticeEvent);
+  }
+
   @OnEvent(CONVERSATION_OPERATION_EVENT)
   public conversationOperation(event: ConversationOperationApplicationEvent): void {
     if (

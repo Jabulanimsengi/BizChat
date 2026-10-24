@@ -35,6 +35,8 @@ const environment = {
   ATTACHMENT_SCANNER: 'clamav',
   CLAMAV_HOST: process.env.CLAMAV_HOST ?? '127.0.0.1',
   CLAMAV_PORT: process.env.CLAMAV_PORT ?? '53310',
+  // The Phase 3-9 harnesses exercise direct assignment; the offer harness switches its own tenant.
+  NEW_TENANT_ASSIGNMENT_MODE: 'AUTO',
   ...process.env,
 };
 
@@ -45,6 +47,7 @@ const singleNodePhases = [
   'phase5-smoke.mjs',
   'phase6-smoke.mjs',
   'phase9-smoke.mjs',
+  'phaseB2-smoke.mjs',
 ];
 
 const redis = new Redis(environment.REDIS_URL);

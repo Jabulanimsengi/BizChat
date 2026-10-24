@@ -264,3 +264,34 @@ Docker test stack, all 13 migrations apply to an empty database, all 19 HTTP int
 (including the new tenant-isolation tests for skills and routing settings), and the end-to-end suite
 (Phases 3-7 and 9, including two nodes) passes. The dashboard pages were type-checked but not
 exercised in a browser.
+
+## Phase B2 - Chat offers — 2026-10-24
+
+- New conversation status `OFFERED`: in `OFFER` mode, routing reserves one consultant's capacity and
+  offers the chat for `offerTimeoutSeconds` (default 30) instead of assigning it. Offers are durable
+  `conversation_offers` rows with outcome `ACCEPTED`, `DECLINED`, `EXPIRED`, or `CANCELLED`.
+- Accept, decline, expiry, consultant disconnect, and visitor abandonment are each a conditional
+  update on the conversation's current offer, so concurrent actors produce one winner. A declined,
+  expired, or cancelled offer returns the chat to the queue (keeping its original wait time) and
+  offers it to the next eligible consultant; the consultant who passed is skipped for
+  `exclusionSeconds` (default 300).
+- Expiry runs on a timer in the offering API instance, with the single-instance reliability sweep as
+  the backstop. After `missedOffersBeforeAway` (default 2) consecutive expiries an online consultant
+  is set away and notified; accepting an offer resets the count.
+- Consultants can preview an offered chat but cannot reply (`OFFER_NOT_ACCEPTED`); transfers wait
+  until the offer resolves (`CONVERSATION_OFFER_PENDING`). Disconnecting cancels pending offers at
+  once; accepted chats keep the existing grace period.
+- Newly registered businesses default to `OFFER` (`NEW_TENANT_ASSIGNMENT_MODE`); existing businesses
+  stay on direct assignment until they opt in on **Dashboard → Routing**. The inbox shows offer cards
+  with a countdown and Accept/Decline; the widget shows "Connecting you with a consultant".
+- Migrations `20261024100000_phase_b2_offer_enums` (enum values alone, as PostgreSQL requires) and
+  `20261024100100_phase_b2_offers` (tables, columns, range checks) are additive.
+
+Verification: format, lint, and type checks pass in every workspace; 165 API unit tests (coverage
+gate passed, 34.23% statements), 10 dashboard, 5 widget, and 19 validation tests pass. Against the
+Docker test stack, all 15 migrations apply to an empty database and all 20 HTTP integration tests
+pass. The end-to-end suite passes, including the new `phaseB2-smoke.mjs`: decline then re-offer and
+accept, two dashboard tabs racing to accept with exactly one winner, two expiries setting a
+consultant away with both chats requeued and an expired offer rejected, the queue draining to a
+consultant who returns, and a disconnect cancelling and re-offering a pending offer. The dashboard
+offer card and settings were type-checked but not exercised in a browser.

@@ -1,7 +1,12 @@
 'use client';
 
-import type { RoutingSettingsResponse, RoutingStrategy, SkillResponse } from '@bizchat/types';
-import { GraduationCap, LoaderCircle, Plus, Route } from 'lucide-react';
+import type {
+  AssignmentMode,
+  RoutingSettingsResponse,
+  RoutingStrategy,
+  SkillResponse,
+} from '@bizchat/types';
+import { BellRing, GraduationCap, LoaderCircle, Plus, Route } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { Button } from './ui/button';
@@ -23,6 +28,11 @@ const STRATEGIES: { value: RoutingStrategy; label: string; description: string }
 export function RoutingManager() {
   const [skills, setSkills] = useState<SkillResponse[]>([]);
   const [settings, setSettings] = useState<RoutingSettingsResponse>();
+  const [offerDraft, setOfferDraft] = useState<OfferDraft>({
+    offerTimeoutSeconds: '30',
+    missedOffersBeforeAway: '2',
+    exclusionMinutes: '5',
+  });
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(true);
@@ -38,6 +48,7 @@ export function RoutingManager() {
         if (!active) return;
         setSkills(skillList);
         setSettings(current);
+        setOfferDraft(offerDraftFrom(current));
         setBusy(false);
       })
       .catch((cause: unknown) => {
@@ -89,15 +100,19 @@ export function RoutingManager() {
     );
   }
 
-  function saveStrategy(routingStrategy: RoutingStrategy): Promise<void> {
+  function saveSettings(input: Partial<RoutingSettingsResponse>, success: string): Promise<void> {
     return run(async () => {
-      setSettings(
-        await apiRequest<RoutingSettingsResponse>('/routing/settings', {
-          method: 'PUT',
-          body: JSON.stringify({ routingStrategy }),
-        }),
-      );
-    }, 'Routing strategy saved.');
+      const saved = await apiRequest<RoutingSettingsResponse>('/routing/settings', {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      });
+      setSettings(saved);
+      setOfferDraft(offerDraftFrom(saved));
+    }, success);
+  }
+
+  function saveStrategy(routingStrategy: RoutingStrategy): Promise<void> {
+    return saveSettings({ routingStrategy }, 'Routing strategy saved.');
   }
 
   if (busy && !settings && !notice)
@@ -210,9 +225,132 @@ export function RoutingManager() {
             ))}
           </fieldset>
         </section>
+        <section className="rounded-3xl border border-line bg-white p-6 lg:col-span-2">
+          <div className="flex items-center gap-3">
+            <BellRing className="text-moss" />
+            <div>
+              <h3 className="font-semibold">Chat offers</h3>
+              <p className="text-sm text-slate-500">
+                Offer each chat to one consultant, who must accept it in time. Unanswered or
+                declined chats move to the next available consultant.
+              </p>
+            </div>
+          </div>
+          <fieldset className="mt-5 grid gap-3 md:grid-cols-2" disabled={busy}>
+            {ASSIGNMENT_MODES.map((mode) => (
+              <label
+                key={mode.value}
+                className={`flex cursor-pointer gap-3 rounded-2xl border px-4 py-3 ${settings?.assignmentMode === mode.value ? 'border-moss bg-mint/40' : 'border-line'}`}
+              >
+                <input
+                  type="radio"
+                  name="assignment-mode"
+                  className="mt-1 accent-[#155f43]"
+                  checked={settings?.assignmentMode === mode.value}
+                  onChange={() =>
+                    void saveSettings({ assignmentMode: mode.value }, 'Assignment mode saved.')
+                  }
+                />
+                <span>
+                  <span className="block text-sm font-medium">{mode.label}</span>
+                  <span className="block text-xs text-slate-500">{mode.description}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <form
+            className="mt-5 grid gap-3 sm:grid-cols-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveSettings(
+                {
+                  offerTimeoutSeconds: Number(offerDraft.offerTimeoutSeconds),
+                  missedOffersBeforeAway: Number(offerDraft.missedOffersBeforeAway),
+                  exclusionSeconds: Number(offerDraft.exclusionMinutes) * 60,
+                },
+                'Offer settings saved.',
+              );
+            }}
+          >
+            <label className="text-xs font-medium text-slate-500">
+              Seconds to accept (10-120)
+              <input
+                type="number"
+                min={10}
+                max={120}
+                required
+                value={offerDraft.offerTimeoutSeconds}
+                onChange={(event) =>
+                  setOfferDraft({ ...offerDraft, offerTimeoutSeconds: event.target.value })
+                }
+                className="mt-1 h-10 w-full rounded-xl border border-line px-3 text-sm text-ink outline-none focus:border-moss"
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-500">
+              Missed offers before Away (0 = never)
+              <input
+                type="number"
+                min={0}
+                max={10}
+                required
+                value={offerDraft.missedOffersBeforeAway}
+                onChange={(event) =>
+                  setOfferDraft({ ...offerDraft, missedOffersBeforeAway: event.target.value })
+                }
+                className="mt-1 h-10 w-full rounded-xl border border-line px-3 text-sm text-ink outline-none focus:border-moss"
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-500">
+              Skip a consultant who passed, for (minutes, 1-60)
+              <input
+                type="number"
+                min={1}
+                max={60}
+                required
+                value={offerDraft.exclusionMinutes}
+                onChange={(event) =>
+                  setOfferDraft({ ...offerDraft, exclusionMinutes: event.target.value })
+                }
+                className="mt-1 h-10 w-full rounded-xl border border-line px-3 text-sm text-ink outline-none focus:border-moss"
+              />
+            </label>
+            <div className="sm:col-span-3">
+              <Button className="h-10 px-4" disabled={busy}>
+                Save offer settings
+              </Button>
+            </div>
+          </form>
+        </section>
       </div>
     </div>
   );
+}
+
+const ASSIGNMENT_MODES: { value: AssignmentMode; label: string; description: string }[] = [
+  {
+    value: 'OFFER',
+    label: 'Offer and wait for acceptance',
+    description: 'The consultant sees a countdown and accepts or declines the chat.',
+  },
+  {
+    value: 'AUTO',
+    label: 'Assign directly',
+    description: 'Chats go straight to the chosen consultant without asking.',
+  },
+];
+
+interface OfferDraft {
+  offerTimeoutSeconds: string;
+  missedOffersBeforeAway: string;
+  exclusionMinutes: string;
+}
+
+function offerDraftFrom(settings: RoutingSettingsResponse): OfferDraft {
+  return {
+    offerTimeoutSeconds: String(settings.offerTimeoutSeconds),
+    missedOffersBeforeAway: String(settings.missedOffersBeforeAway),
+    exclusionMinutes: String(Math.round(settings.exclusionSeconds / 60)),
+  };
 }
 
 function message(value: unknown): string {

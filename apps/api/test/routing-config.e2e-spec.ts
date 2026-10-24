@@ -122,19 +122,46 @@ describe('Routing configuration (real PostgreSQL and Redis)', () => {
       .send({ skills: [{ skillId: skill.id, proficiency: 3 }] })
       .expect(404);
 
+    // Newly registered tenants get offers by default (NEW_TENANT_ASSIGNMENT_MODE).
+    const newTenantDefaults = {
+      routingStrategy: 'LEAST_BUSY',
+      assignmentMode: 'OFFER',
+      offerTimeoutSeconds: 30,
+      missedOffersBeforeAway: 2,
+      exclusionSeconds: 300,
+    };
     await request(server)
       .get('/api/v1/routing/settings')
       .set('Cookie', owner)
-      .expect(200, { routingStrategy: 'LEAST_BUSY' });
+      .expect(200, newTenantDefaults);
     await request(server)
       .put('/api/v1/routing/settings')
       .set('Cookie', owner)
-      .send({ routingStrategy: 'BEST_SKILL' })
-      .expect(200, { routingStrategy: 'BEST_SKILL' });
+      .send({ routingStrategy: 'BEST_SKILL', offerTimeoutSeconds: 45 })
+      .expect(200, {
+        ...newTenantDefaults,
+        routingStrategy: 'BEST_SKILL',
+        offerTimeoutSeconds: 45,
+      });
+    await request(server)
+      .put('/api/v1/routing/settings')
+      .set('Cookie', owner)
+      .send({ offerTimeoutSeconds: 5 })
+      .expect(400);
     await request(server)
       .get('/api/v1/routing/settings')
       .set('Cookie', otherOwner)
-      .expect(200, { routingStrategy: 'LEAST_BUSY' });
+      .expect(200, newTenantDefaults);
+  });
+
+  it('enforces offer setting ranges in the database as well as the API', async () => {
+    const owned = await prisma.skill.findFirstOrThrow({ where: { name: 'Tax returns' } });
+    await expect(
+      prisma.routingSettings.update({
+        where: { businessId: owned.businessId },
+        data: { offerTimeoutSeconds: 1 },
+      }),
+    ).rejects.toThrow();
   });
 
   it('enforces the proficiency range in the database as well as the API', async () => {
