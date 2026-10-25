@@ -12,6 +12,7 @@ import type { WidgetBootstrapInput } from '@bizchat/validation';
 import type { Environment } from '../config/environment';
 import { PrismaService } from '../database/prisma.service';
 import { normalizeWidgetOrigin } from '../domains/domain-normalization';
+import { IntakeFormService } from '../intake/intake-form.service';
 
 interface SocketWidgetSession {
   id: string;
@@ -26,6 +27,7 @@ export class WidgetService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<Environment, true>,
     private readonly identities: CustomerIdentityService,
+    private readonly forms: IntakeFormService,
   ) {}
 
   public async bootstrap(
@@ -108,6 +110,18 @@ export class WidgetService {
       select: { publicId: true, name: true },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
     });
+    const topics = await this.prisma.topic.findMany({
+      where: { businessId: business.id, status: 'ACTIVE', showAsQuickReply: true },
+      select: { publicId: true, name: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+    const beforeChatForm = await this.forms.beforeChatForm(business.id);
+    const form = beforeChatForm
+      ? this.forms.widgetForm(
+          beforeChatForm,
+          await this.forms.prefill(beforeChatForm, identity?.visitorId ?? null),
+        )
+      : undefined;
     return {
       ...(identity
         ? {
@@ -130,6 +144,8 @@ export class WidgetService {
       availability: 'UNKNOWN',
       config,
       departments,
+      topics,
+      ...(form ? { form } : {}),
     };
   }
 

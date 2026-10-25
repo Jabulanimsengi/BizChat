@@ -35,6 +35,10 @@ const environment = {
   ATTACHMENT_SCANNER: 'clamav',
   CLAMAV_HOST: process.env.CLAMAV_HOST ?? '127.0.0.1',
   CLAMAV_PORT: process.env.CLAMAV_PORT ?? '53310',
+  // The Phase 3-9 harnesses exercise direct assignment; the offer harness switches its own tenant.
+  NEW_TENANT_ASSIGNMENT_MODE: 'AUTO',
+  // The plans harness signs in as this platform administrator.
+  PLATFORM_ADMIN_EMAILS: 'platform-admin-e2e@example.test',
   ...process.env,
 };
 
@@ -45,6 +49,12 @@ const singleNodePhases = [
   'phase5-smoke.mjs',
   'phase6-smoke.mjs',
   'phase9-smoke.mjs',
+  'phaseB2-smoke.mjs',
+  'phaseB3-smoke.mjs',
+  'phaseB4-smoke.mjs',
+  'phaseB5-smoke.mjs',
+  'phaseC-sdk-smoke.mjs',
+  'phaseD-plans-smoke.mjs',
 ];
 
 const redis = new Redis(environment.REDIS_URL);
@@ -101,6 +111,8 @@ async function startApi(port, logName) {
 async function main() {
   await run(npm, ['run', 'db:generate']);
   await run(npm, ['run', 'build', '-w', '@bizchat/api']);
+  // The SDK harness drives the API through the built client.
+  await run(npm, ['run', 'build', '-w', '@bizchat/sdk']);
   await run(npm, ['run', 'db:migrate:deploy']);
 
   const primary = await startApi(apiPort, 'e2e-api.log');
@@ -110,7 +122,10 @@ async function main() {
     await waitForHealth(apiUrl);
     await waitForHealth(secondaryUrl);
 
+    // E2E_ONLY=<harness file> runs a single harness, for example while investigating a failure.
+    const only = process.env.E2E_ONLY;
     for (const phase of singleNodePhases) {
+      if (only && only !== phase) continue;
       await clearThrottleCounters();
       console.log(`Running ${phase}…`);
       await run('node', [`tools/${phase}`], {
@@ -118,11 +133,20 @@ async function main() {
       });
     }
 
-    await clearThrottleCounters();
-    console.log('Running phase7-smoke.mjs (two nodes)…');
-    await run('node', ['tools/phase7-smoke.mjs'], {
-      env: { ...environment, SMOKE_API_A: apiUrl, SMOKE_API_B: secondaryUrl },
-    });
+    if (!only || only === 'phase7-smoke.mjs') {
+      await clearThrottleCounters();
+      console.log('Running phase7-smoke.mjs (two nodes)…');
+      await run('node', ['tools/phase7-smoke.mjs'], {
+        env: { ...environment, SMOKE_API_A: apiUrl, SMOKE_API_B: secondaryUrl },
+      });
+    }
+
+    // Starts its own two nodes and an nginx balancer (infra/nginx/api-lb.conf); skips without Docker.
+    if (!only || only === 'ha-failover-smoke.mjs') {
+      await clearThrottleCounters();
+      console.log('Running ha-failover-smoke.mjs (balancer, one node killed)…');
+      await run('node', ['tools/ha-failover-smoke.mjs'], { env: environment });
+    }
 
     console.log('End-to-end smoke suite passed');
   } finally {

@@ -16,10 +16,11 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-function sessionResponse(emailVerified: boolean): unknown {
+function sessionResponse(emailVerified: boolean, role = 'OWNER', platformAdmin = false): unknown {
   return {
+    platformAdmin,
     user: { id: 'user-1', email: 'owner@example.com', displayName: 'Owner', emailVerified },
-    membership: { id: 'membership-1', role: 'OWNER' },
+    membership: { id: 'membership-1', role },
     business: {
       id: 'business-1',
       name: 'Acme',
@@ -32,11 +33,11 @@ function sessionResponse(emailVerified: boolean): unknown {
   };
 }
 
-function mockSession(emailVerified: boolean): void {
+function mockSession(emailVerified: boolean, role?: string, platformAdmin?: boolean): void {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(sessionResponse(emailVerified)), {
+      new Response(JSON.stringify(sessionResponse(emailVerified, role, platformAdmin)), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       }),
@@ -60,8 +61,11 @@ describe('DashboardFrame', () => {
     expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
   });
 
-  it('does not link to the unimplemented analytics route', async () => {
-    mockSession(true);
+  it.each([
+    ['SUPERVISOR', true],
+    ['CONSULTANT', false],
+  ])('links to analytics for a %s only when they may view it', async (role, visible) => {
+    mockSession(true, role);
     render(
       <DashboardFrame eyebrow="Ops" title="Overview" description="Everything at a glance">
         <p>dashboard-content</p>
@@ -69,7 +73,19 @@ describe('DashboardFrame', () => {
     );
 
     await screen.findByText('dashboard-content');
-    expect(screen.queryByRole('link', { name: 'Analytics' })).not.toBeInTheDocument();
+    expect(Boolean(screen.queryByRole('link', { name: 'Analytics' }))).toBe(visible);
+    // Administration stays with owners and admins.
+    expect(screen.queryByRole('link', { name: 'Routing' })).not.toBeInTheDocument();
+  });
+
+  it('links to platform administration only for platform administrators', async () => {
+    mockSession(true, 'OWNER', true);
+    render(
+      <DashboardFrame eyebrow="Ops" title="Overview" description="Everything at a glance">
+        <p>dashboard-content</p>
+      </DashboardFrame>,
+    );
+    expect(await screen.findByRole('link', { name: 'Platform' })).toBeInTheDocument();
   });
 
   it('prompts unverified users to confirm their email', async () => {

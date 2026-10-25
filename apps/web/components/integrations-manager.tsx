@@ -11,6 +11,23 @@ const scopes = [
   'messages:read',
   'messages:write',
   'customers:identify',
+  'intake:read',
+  'availability:read',
+  'setup:read',
+  'setup:write',
+  'privacy:read',
+  'privacy:write',
+];
+export const webhookEvents = [
+  'conversation.created',
+  'message.created',
+  'conversation.resolved',
+  'conversation.queued',
+  'conversation.offered',
+  'conversation.assigned',
+  'conversation.overflowed',
+  'conversation.follow_up_requested',
+  'conversation.closed',
 ];
 interface Key {
   id: string;
@@ -48,6 +65,7 @@ export function IntegrationsManager() {
   ]);
   const [days, setDays] = useState(90);
   const [url, setUrl] = useState('');
+  const [selectedEvents, setSelectedEvents] = useState<string[]>(webhookEvents);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   async function refresh(): Promise<void> {
@@ -231,8 +249,8 @@ export function IntegrationsManager() {
       <Card className="space-y-4 p-6">
         <h2 className="text-lg font-semibold">Webhooks</h2>
         <p className="text-sm text-slate-600">
-          Receive conversation.created, message.created, and conversation.resolved. Verify the
-          signature before processing events. Internal notes are excluded.
+          Choose the events to receive. Verify the signature before processing events. Internal
+          notes and follow-up contact details are never sent.
         </p>
         <form
           className="flex flex-wrap items-end gap-3"
@@ -245,7 +263,7 @@ export function IntegrationsManager() {
                   method: 'POST',
                   body: JSON.stringify({
                     url,
-                    events: ['conversation.created', 'message.created', 'conversation.resolved'],
+                    events: selectedEvents,
                   }),
                 },
               );
@@ -264,7 +282,26 @@ export function IntegrationsManager() {
               placeholder="https://your-site.com/webhooks/bizchat"
             />
           </label>
-          <Button disabled={busy}>Add webhook</Button>
+          <fieldset className="flex w-full flex-wrap gap-x-4 gap-y-2">
+            <legend className="mb-2 text-sm font-medium">Events</legend>
+            {webhookEvents.map((item) => (
+              <label key={item} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={selectedEvents.includes(item)}
+                  onChange={(event) =>
+                    setSelectedEvents((items) =>
+                      event.target.checked
+                        ? [...items, item]
+                        : items.filter((entry) => entry !== item),
+                    )
+                  }
+                />
+                {item}
+              </label>
+            ))}
+          </fieldset>
+          <Button disabled={busy || selectedEvents.length === 0}>Add webhook</Button>
         </form>
         <ul className="divide-y">
           {endpoints.map((endpoint) => (
@@ -274,6 +311,7 @@ export function IntegrationsManager() {
             >
               <p className="break-all text-sm">
                 {endpoint.url} · {endpoint.enabled ? 'Enabled' : 'Disabled'}
+                <span className="block text-xs text-slate-500">{endpoint.events.join(', ')}</span>
               </p>
               <div>
                 <Button

@@ -7,5 +7,6 @@ import { BusinessUsersService } from './business-users.service';
   imports: [AuthModule],
   controllers: [BusinessUsersController],
   providers: [BusinessUsersService],
+  exports: [BusinessUsersService],
 })
 export class BusinessUsersModule {}

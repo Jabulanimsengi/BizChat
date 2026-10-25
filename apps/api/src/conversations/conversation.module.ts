@@ -7,9 +7,17 @@ import { MessageService } from './message.service';
 import { RoutingModule } from '../routing/routing.module';
 import { ConversationOperationsService } from './conversation-operations.service';
 import { ConversationTimelineModule } from './conversation-timeline.module';
+import { IntakeModule } from '../intake/intake.module';
+import { BusinessHoursModule } from '../business-hours/business-hours.module';
 
 @Module({
-  imports: [AuthModule, RoutingModule, ConversationTimelineModule],
+  imports: [
+    AuthModule,
+    RoutingModule,
+    ConversationTimelineModule,
+    IntakeModule,
+    BusinessHoursModule,
+  ],
   controllers: [ConversationController],
   providers: [
     ConversationService,

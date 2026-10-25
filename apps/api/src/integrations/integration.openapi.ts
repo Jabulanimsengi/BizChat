@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { customerSchema, startSchema, sendSchema, resolveSchema } from './integration.contracts';
+import { identifySchema, startSchema, sendSchema, resolveSchema } from './integration.contracts';
 
 // Keep request documentation generated from the same contracts used by validation.
 function schema(value: z.ZodTypeAny): object {
@@ -12,6 +12,10 @@ function schema(value: z.ZodTypeAny): object {
     }
     return result;
   }
+  if (value instanceof z.ZodBoolean) return { type: 'boolean' };
+  // Pre-chat answers: string values keyed by the form's field keys.
+  if (value instanceof z.ZodRecord)
+    return { type: 'object', additionalProperties: schema(value.valueSchema as z.ZodTypeAny) };
   if (value instanceof z.ZodObject) {
     const shape = value.shape as Record<string, z.ZodTypeAny>;
     return {
@@ -77,6 +81,50 @@ function operation(
   };
 }
 const ref = (name: string): object => ({ $ref: `#/components/schemas/${name}` });
+
+/** Setup API: the dashboard's configuration contracts, for keys with setup:read or setup:write. */
+const anyBody = { type: 'object', description: 'See docs/api/setup.md for the fields.' };
+function setupOperation(summary: string, write: boolean, status = '200'): object {
+  return {
+    ...operation(summary, write ? 'setup:write' : 'setup:read', anyBody, [], undefined, status),
+    ...(write
+      ? {
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: anyBody } },
+          },
+        }
+      : {}),
+  };
+}
+const setupId = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', format: 'uuid' },
+};
+const setupPaths: Record<string, object> = Object.fromEntries(
+  (['departments', 'skills', 'topics', 'intake-forms'] as const).flatMap(
+    (resource): [string, object][] => [
+      [
+        `/setup/${resource}`,
+        {
+          get: setupOperation(`List ${resource}`, false),
+          post: setupOperation(`Create one of the ${resource}`, true, '201'),
+        },
+      ],
+      [
+        `/setup/${resource}/{id}`,
+        {
+          patch: {
+            ...setupOperation(`Update one of the ${resource}`, true),
+            parameters: [setupId],
+          },
+        },
+      ],
+    ],
+  ),
+);
 export const integrationOpenApi = {
   openapi: '3.1.0',
   info: {
@@ -155,6 +203,62 @@ export const integrationOpenApi = {
         'Resolve',
       ),
     },
+    '/availability': {
+      get: operation(
+        'Whether a new chat would reach a consultant now, overall and per department',
+        'availability:read',
+        {
+          type: 'object',
+          required: ['open', 'availability', 'onlineAgents', 'availableAgents', 'departments'],
+          properties: {
+            open: {
+              type: 'boolean',
+              description: 'Inside business hours (always true without hours)',
+            },
+            availability: { type: 'string', enum: ['ONLINE', 'OFFLINE'] },
+            onlineAgents: { type: 'integer' },
+            availableAgents: { type: 'integer', description: 'Online and below their chat limit' },
+            departments: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  publicId: { type: 'string' },
+                  name: { type: 'string' },
+                  onlineAgents: { type: 'integer' },
+                  availableAgents: { type: 'integer' },
+                },
+              },
+            },
+            checkedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+      ),
+    },
+    ...setupPaths,
+    '/setup/topics/test': {
+      post: setupOperation('Preview how a message would be classified', false),
+    },
+    '/setup/routing-settings': {
+      get: setupOperation('Read routing settings', false),
+      put: setupOperation('Update routing settings', true),
+    },
+    '/setup/business-hours': {
+      get: setupOperation('Read business hours', false),
+      put: setupOperation('Replace the weekly business hours', true),
+    },
+    '/setup/consultants': {
+      get: setupOperation('List consultants and how they are routed', false),
+    },
+    '/setup/consultants/{id}': {
+      patch: {
+        ...setupOperation(
+          "Set a consultant's departments, skills, capacity, or routing switch",
+          true,
+        ),
+        parameters: [setupId],
+      },
+    },
     '/customers/identify': {
       post: operation(
         'Issue a five-minute customer identity proof',
@@ -178,7 +282,7 @@ export const integrationOpenApi = {
       IntegrationKey: { type: 'http', scheme: 'bearer', bearerFormat: 'bzc_<secret>' },
     },
     schemas: {
-      Customer: schema(customerSchema),
+      Customer: schema(identifySchema),
       Start: schema(startSchema),
       Send: schema(sendSchema),
       Resolve: schema(resolveSchema),
@@ -192,6 +296,7 @@ export const integrationOpenApi = {
             enum: [
               'NEW',
               'QUEUED',
+              'OFFERED',
               'ASSIGNED',
               'ACTIVE',
               'WAITING_FOR_CUSTOMER',
@@ -202,6 +307,15 @@ export const integrationOpenApi = {
           },
           source: { type: 'string' },
           subject: { type: ['string', 'null'] },
+          priority: { type: 'string', enum: ['LOW', 'NORMAL', 'HIGH', 'URGENT'] },
+          departmentId: { type: ['string', 'null'], format: 'uuid' },
+          topicId: { type: ['string', 'null'], format: 'uuid' },
+          overflowLevel: { type: 'integer' },
+          followUpRequested: { type: 'boolean' },
+          followUp: {
+            type: ['object', 'null'],
+            description: 'With intake:read only: when and how the visitor asked to be contacted',
+          },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
           resolvedAt: { type: ['string', 'null'], format: 'date-time' },

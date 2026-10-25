@@ -1,3 +1,4 @@
+import { PlanService } from '../plans/plan.service';
 import {
   BadRequestException,
   ConflictException,
@@ -17,6 +18,8 @@ import {
   MESSAGE_CREATED_EVENT,
 } from '../conversations/conversation-events';
 import { CONVERSATION_CAPACITY_RELEASED_EVENT } from '../routing/routing-events';
+import { classificationRecord, TopicCatalogService } from '../intake/topic-catalog.service';
+import { IntakeFormService } from '../intake/intake-form.service';
 import { CustomerIdentityService } from './customer-identity.service';
 import {
   idempotencySchema,
@@ -42,6 +45,11 @@ function publicConversation(row: Conversation): object {
     status: row.status,
     source: row.source,
     subject: row.subject,
+    priority: row.priority,
+    departmentId: row.departmentId,
+    topicId: row.topicId,
+    overflowLevel: row.overflowLevel,
+    followUpRequested: row.followUpRequestedAt !== null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
@@ -56,6 +64,9 @@ export class IntegrationService {
     private readonly timeline: ConversationTimelineService,
     private readonly customers: CustomerIdentityService,
     private readonly events: EventEmitter2,
+    private readonly topics: TopicCatalogService,
+    private readonly forms: IntakeFormService,
+    private readonly plans: PlanService,
   ) {}
 
   public async list(principal: IntegrationPrincipal, query: PageInput): Promise<object> {
@@ -74,7 +85,22 @@ export class IntegrationService {
   }
 
   public async get(principal: IntegrationPrincipal, id: string): Promise<object> {
-    return publicConversation(await this.find(this.prisma, principal.businessId, id));
+    const row = await this.find(this.prisma, principal.businessId, id);
+    const conversation = publicConversation(row);
+    // Pre-chat answers and follow-up contact details are personal information and need the
+    // separate intake:read scope.
+    return principal.scopes.includes('intake:read')
+      ? {
+          ...conversation,
+          intake: await this.forms.forConversation(id),
+          followUp: row.followUpRequestedAt
+            ? {
+                requestedAt: row.followUpRequestedAt.toISOString(),
+                contact: row.followUpContact,
+              }
+            : null,
+        }
+      : conversation;
   }
 
   public async history(
@@ -118,13 +144,27 @@ export class IntegrationService {
   ): Promise<Prisma.InputJsonValue> {
     return this.write(principal, key, 'conversation.create', input, async (tx, publish) => {
       const visitorId = await this.customers.customer(tx, principal.businessId, input.externalId);
+      // No visitor can answer a prompt here, so an uncertain classification takes the default topic.
+      const intake = input.departmentPublicId
+        ? null
+        : await this.topics.decide(
+            principal.businessId,
+            [input.subject, input.content].filter(Boolean).join('\n'),
+            {
+              ...(input.topicPublicId ? { topicPublicId: input.topicPublicId } : {}),
+              explicitMethod: 'INTEGRATION',
+              canAsk: false,
+            },
+          );
       const department = await tx.department.findFirst({
         where: {
           businessId: principal.businessId,
           status: 'ACTIVE',
           ...(input.departmentPublicId
             ? { publicId: input.departmentPublicId }
-            : { isDefault: true }),
+            : intake?.routing.departmentId
+              ? { id: intake.routing.departmentId }
+              : { isDefault: true }),
         },
       });
       if (input.departmentPublicId && !department)
@@ -132,6 +172,7 @@ export class IntegrationService {
           code: 'DEPARTMENT_NOT_FOUND',
           message: 'Department not found',
         });
+      await this.plans.assertWithin(principal.businessId, 'conversations', tx);
       const conversation = await tx.conversation.create({
         data: {
           businessId: principal.businessId,
@@ -139,6 +180,15 @@ export class IntegrationService {
           source: 'INTEGRATION',
           subject: input.subject,
           departmentId: department?.id,
+          ...(intake
+            ? {
+                topicId: intake.routing.topicId,
+                priority: intake.routing.priority,
+                requiredSkillId: intake.routing.requiredSkillId,
+                requiredSkillMinProficiency: intake.routing.requiredSkillMinProficiency,
+                intakeStatus: intake.intakeStatus,
+              }
+            : {}),
           participants: {
             create: {
               businessId: principal.businessId,
@@ -155,6 +205,25 @@ export class IntegrationService {
         actorType: 'INTEGRATION',
         actorId: principal.keyId,
       });
+      if (intake)
+        await tx.conversationClassification.create({
+          data: classificationRecord(principal.businessId, conversation.id, intake),
+        });
+      // Answers are optional over the API (no visitor to ask), but must be valid when sent.
+      if (input.intake) {
+        const form =
+          (await this.forms.beforeChatForm(principal.businessId)) ??
+          (await this.forms.afterTopicForm(principal.businessId, intake?.routing.topicId ?? null));
+        if (form)
+          await this.forms.record(
+            tx,
+            principal.businessId,
+            conversation.id,
+            form,
+            this.forms.validate(form, input.intake, await this.forms.prefill(form, visitorId)),
+            input.intake.consent ?? false,
+          );
+      }
       const result = await this.messages.createInTransaction(tx, {
         businessId: principal.businessId,
         conversationId: conversation.id,

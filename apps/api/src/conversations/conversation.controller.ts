@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import type {
   ConversationEventResponse,
+  ConversationIntakeResponse,
   ConversationPage,
   ConversationResponse,
   MessagePage,
@@ -66,6 +67,14 @@ export class ConversationController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<ConversationResponse> {
     return this.conversations.getDashboardConversation(auth, id);
+  }
+
+  @Get(':id/intake')
+  public intake(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<ConversationIntakeResponse | null> {
+    return this.conversations.getDashboardIntake(auth, id);
   }
 
   @Get(':id/messages')

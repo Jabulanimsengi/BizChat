@@ -70,7 +70,343 @@ export interface BusinessUserResponse {
   maxConcurrentChats: number;
   routingEnabled: boolean;
   departmentIds: string[];
+  skills: AgentSkillResponse[];
   createdAt: string;
+}
+
+export interface SkillResponse {
+  id: string;
+  name: string;
+  description: string | null;
+  status: 'ACTIVE' | 'DISABLED';
+  consultantCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A consultant's skill with proficiency from 1 (basic) to 5 (expert). */
+export interface AgentSkillResponse {
+  skillId: string;
+  proficiency: number;
+}
+
+export type RoutingStrategy = 'LEAST_BUSY' | 'BEST_SKILL';
+export type AssignmentMode = 'AUTO' | 'OFFER';
+export interface RoutingSettingsResponse {
+  routingStrategy: RoutingStrategy;
+  assignmentMode: AssignmentMode;
+  offerTimeoutSeconds: number;
+  /** Consecutive missed offers before a consultant is set away; 0 disables. */
+  missedOffersBeforeAway: number;
+  exclusionSeconds: number;
+  /** Classifier confidence at or above this routes without asking the visitor. */
+  autoRouteThreshold: number;
+  /** Below this the visitor is asked to choose a topic; in between they may change it. */
+  confirmThreshold: number;
+  topicPromptTimeoutSeconds: number;
+  intakeFormTiming: 'AFTER_TOPIC' | 'BEFORE_CHAT';
+  defaultIntakeFormId: string | null;
+}
+
+export type IntakeStatus = 'NOT_REQUIRED' | 'AWAITING_TOPIC' | 'AWAITING_FORM' | 'COMPLETE';
+export type ClassificationDecision = 'ROUTE' | 'CONFIRM' | 'ASK';
+
+export interface TopicKeyword {
+  phrase: string;
+  /** 1-5; defaults to 1 for a word and 2 for a phrase of several words. */
+  weight?: number;
+}
+
+export interface TopicResponse {
+  id: string;
+  publicId: string;
+  name: string;
+  description: string | null;
+  departmentId: string | null;
+  requiredSkillId: string | null;
+  requiredSkillMinProficiency: number | null;
+  priority: ConversationPriority;
+  keywords: TopicKeyword[];
+  negativeKeywords: string[];
+  examples: string[];
+  showAsQuickReply: boolean;
+  isDefault: boolean;
+  status: 'ACTIVE' | 'DISABLED';
+  sortOrder: number;
+  intakeFormId: string | null;
+  overflowSteps: OverflowStep[];
+  maxWaitSeconds: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A timed widening of who may take a queued conversation; steps apply cumulatively. */
+export interface OverflowStep {
+  afterSeconds: number;
+  addDepartmentIds: string[];
+  relaxSkill: boolean;
+  anyConsultant: boolean;
+}
+
+export interface FollowUpContact {
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  note: string | null;
+}
+
+/** Sent to a waiting visitor when the topic's maximum wait passes. */
+export interface ConversationWaitOptionsEvent {
+  conversationId: string;
+  reason: 'MAX_WAIT';
+}
+
+/** Durations in seconds over the conversations that reached the measured point. */
+export interface AnalyticsDuration {
+  count: number;
+  medianSeconds: number | null;
+  p90Seconds: number | null;
+  averageSeconds: number | null;
+}
+
+export interface AnalyticsBreakdownRow {
+  id: string | null;
+  name: string;
+  conversations: number;
+  medianWaitSeconds: number | null;
+}
+
+/**
+ * Reporting over conversations created in a date range (the tenant's local days). Every figure
+ * refers to that cohort, so a chat created on the last day and resolved later still counts.
+ */
+export interface AnalyticsOverviewResponse {
+  from: string;
+  to: string;
+  timezone: string;
+  totals: {
+    conversations: number;
+    assigned: number;
+    resolved: number;
+    abandoned: number;
+    followUps: number;
+    overflowed: number;
+  };
+  daily: { date: string; created: number; resolved: number; abandoned: number }[];
+  waitToAssignment: AnalyticsDuration;
+  firstResponse: AnalyticsDuration;
+  handleTime: AnalyticsDuration;
+  offers: {
+    offered: number;
+    accepted: number;
+    declined: number;
+    expired: number;
+    cancelled: number;
+    acceptRate: number | null;
+  };
+  bySource: { source: ConversationSource; conversations: number }[];
+  byTopic: AnalyticsBreakdownRow[];
+  byDepartment: AnalyticsBreakdownRow[];
+  classification: {
+    classified: number;
+    autoRouted: number;
+    confirmed: number;
+    asked: number;
+    defaulted: number;
+    /** Automatically routed or confirmed chats whose topic the visitor then changed. */
+    changedByVisitor: number;
+  };
+}
+
+export interface ConsultantAnalyticsRow {
+  agentProfileId: string;
+  displayName: string;
+  assigned: number;
+  resolved: number;
+  firstResponse: AnalyticsDuration;
+  offers: { offered: number; accepted: number; declined: number; expired: number };
+}
+
+/** Integration API: whether a chat would reach someone now. */
+export interface IntegrationAvailabilityResponse {
+  open: boolean;
+  /** ONLINE when the business is open and at least one consultant is online. */
+  availability: 'ONLINE' | 'OFFLINE';
+  onlineAgents: number;
+  /** Online consultants below their concurrent-chat limit. */
+  availableAgents: number;
+  departments: { publicId: string; name: string; onlineAgents: number; availableAgents: number }[];
+  checkedAt: string;
+}
+
+export interface PrivacySettingsResponse {
+  /** Resolved or closed conversations older than this many days are deleted; null keeps them. */
+  conversationRetentionDays: number | null;
+}
+
+/** Everything held about one visitor or customer, for a data subject access request. */
+export interface VisitorDataExport {
+  exportedAt: string;
+  visitor: { id: string; createdAt: string; lastSeenAt: string };
+  customer: { externalId: string; displayName: string | null; email: string | null } | null;
+  conversations: {
+    id: string;
+    status: ConversationStatus;
+    createdAt: string;
+    resolvedAt: string | null;
+    topic: string | null;
+    followUpContact: FollowUpContact | null;
+    intake: IntakeAnswer[] | null;
+    messages: { senderType: string; content: string | null; createdAt: string }[];
+    attachments: {
+      originalFileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      createdAt: string;
+    }[];
+  }[];
+}
+
+export interface VisitorErasureResponse {
+  visitorId: string;
+  conversationsDeleted: number;
+  attachmentsDeleted: number;
+}
+
+export type PlanMetric = 'consultants' | 'conversations' | 'integrationKeys' | 'webhookEndpoints';
+
+export interface PlanResponse {
+  id: string;
+  code: string;
+  name: string;
+  maxConsultants: number | null;
+  maxConversationsPerMonth: number | null;
+  maxIntegrationKeys: number | null;
+  maxWebhookEndpoints: number | null;
+  tenants: number;
+}
+
+/** A tenant's plan and what it has used; conversations count for the current UTC month. */
+export interface PlanUsageResponse {
+  plan: { code: string; name: string } | null;
+  period: string;
+  usage: Record<PlanMetric, { used: number; limit: number | null }>;
+}
+
+export interface PlatformTenantResponse {
+  id: string;
+  name: string;
+  slug: string;
+  status: 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'TRIAL';
+  createdAt: string;
+  planId: string | null;
+  usage: PlanUsageResponse['usage'];
+}
+
+export interface TopicTestResponse {
+  decision: ClassificationDecision;
+  confidence: number;
+  topic: { id: string; name: string } | null;
+  candidates: { topicId: string; name: string; score: number }[];
+}
+
+/** A topic a visitor can pick in the widget. */
+export interface WidgetTopic {
+  publicId: string;
+  name: string;
+}
+
+/**
+ * Sent with the conversation when the visitor should pick a topic (`ASK`, routing waits) or may
+ * change the one chosen for them (`CONFIRM`, already routing).
+ */
+export interface IntakePrompt {
+  /** TOPIC: choose a topic. FORM: complete the pre-chat form; routing waits. */
+  step: 'TOPIC' | 'FORM';
+  mode: 'ASK' | 'CONFIRM';
+  topics: WidgetTopic[];
+  selectedTopic: WidgetTopic | null;
+  expiresAt: string | null;
+  form?: WidgetIntakeForm;
+}
+
+export type IntakeFieldType = 'TEXT' | 'EMAIL' | 'PHONE' | 'SELECT' | 'REFERENCE';
+export type IntakePrefillClaim = 'name' | 'email';
+
+/** A pre-chat form field as configured by the business. */
+export interface IntakeFormField {
+  /** Stable answer key, e.g. `registration_number`. */
+  key: string;
+  label: string;
+  type: IntakeFieldType;
+  required: boolean;
+  maxLength?: number;
+  /** SELECT choices. */
+  options?: string[];
+  /** REFERENCE format: `#` digit, `A` letter, `*` letter or digit, anything else literal. */
+  mask?: string;
+  /** Filled from a signed customer identity claim and skipped when present. */
+  prefillFrom?: IntakePrefillClaim;
+}
+
+export interface IntakeFormResponse {
+  id: string;
+  name: string;
+  version: number;
+  fields: IntakeFormField[];
+  consentText: string | null;
+  status: 'ACTIVE' | 'DISABLED';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A form as the widget shows it; prefilled fields carry their value. */
+export interface WidgetIntakeForm {
+  name: string;
+  consentText: string | null;
+  fields: (Omit<IntakeFormField, 'prefillFrom'> & { value?: string })[];
+}
+
+export interface IntakeAnswer {
+  key: string;
+  label: string;
+  value: string;
+}
+
+/** Submitted pre-chat answers, visible to consultants handling the conversation. */
+export interface ConversationIntakeResponse {
+  formName: string | null;
+  formVersion: number;
+  answers: IntakeAnswer[];
+  consentAt: string | null;
+  submittedAt: string;
+}
+
+/** Result of a visitor topic or form submission: routed, or the next intake step. */
+export interface IntakeSubmitResult {
+  routed: ConversationRoutingEvent | null;
+  intake: IntakePrompt | null;
+}
+
+/** A conversation offered to one consultant, who must accept before `expiresAt`. */
+export interface ConversationOfferEvent {
+  offerId: string;
+  conversation: ConversationResponse;
+  firstMessage: string | null;
+  intake: ConversationIntakeResponse | null;
+  offeredAt: string;
+  expiresAt: string;
+}
+
+export interface ConversationOfferWithdrawnEvent {
+  offerId: string;
+  conversationId: string;
+  reason: 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'CANCELLED';
+}
+
+export interface AgentNoticeEvent {
+  code: 'SET_AWAY_AFTER_MISSED_OFFERS';
+  message: string;
 }
 
 export interface AuditLogResponse {
@@ -106,6 +442,10 @@ export interface WidgetBootstrapResponse {
   availability: 'UNKNOWN' | 'ONLINE' | 'OFFLINE';
   config: WidgetPublicConfig;
   departments: WidgetDepartment[];
+  /** Topics offered as buttons before the first message; empty when the tenant has none. */
+  topics: WidgetTopic[];
+  /** The form to complete before the first message (BEFORE_CHAT timing only). */
+  form?: WidgetIntakeForm;
 }
 
 export interface WidgetDepartment {
@@ -136,6 +476,7 @@ export interface WidgetConnectedEvent {
 export type ConversationStatus =
   | 'NEW'
   | 'QUEUED'
+  | 'OFFERED'
   | 'ASSIGNED'
   | 'ACTIVE'
   | 'WAITING_FOR_CUSTOMER'
@@ -179,6 +520,13 @@ export interface ConversationResponse {
   assignedAgentMembershipId: string | null;
   departmentId: string | null;
   departmentName: string | null;
+  topicId: string | null;
+  topicName: string | null;
+  intakeStatus: IntakeStatus;
+  overflowLevel: number;
+  maxWaitReachedAt: string | null;
+  followUpRequestedAt: string | null;
+  followUpContact: FollowUpContact | null;
   queuedAt: string | null;
   queuePosition: number | null;
   resolvedAt: string | null;
@@ -229,7 +577,7 @@ export interface BusinessAvailabilityEvent {
 
 export interface ConversationRoutingEvent {
   conversation: ConversationResponse;
-  outcome: 'ASSIGNED' | 'QUEUED';
+  outcome: 'ASSIGNED' | 'QUEUED' | 'OFFERED';
   assignedAgentMembershipId: string | null;
   queuedAt: string | null;
   queuePosition: number | null;
@@ -260,7 +608,12 @@ export type ConversationEventType =
   | 'AGENT_JOINED'
   | 'AGENT_LEFT'
   | 'TAGS_CHANGED'
-  | 'INTERNAL_NOTE_ADDED';
+  | 'INTERNAL_NOTE_ADDED'
+  | 'OFFERED'
+  | 'TOPIC_SET'
+  | 'OVERFLOWED'
+  | 'MAX_WAIT_REACHED'
+  | 'FOLLOW_UP_REQUESTED';
 
 export interface ConversationEventResponse {
   id: string;
@@ -275,7 +628,14 @@ export interface ConversationEventResponse {
 export interface ConversationOperationEvent {
   conversation: ConversationResponse;
   event: ConversationEventResponse;
-  operation: 'TRANSFERRED' | 'RESOLVED' | 'REOPENED' | 'TAGS_CHANGED';
+  operation:
+    | 'TRANSFERRED'
+    | 'RESOLVED'
+    | 'REOPENED'
+    | 'TAGS_CHANGED'
+    | 'ABANDONED'
+    | 'OVERFLOWED'
+    | 'FOLLOW_UP_REQUESTED';
   previousAssignedAgentMembershipId: string | null;
   assignedAgentMembershipId: string | null;
 }
@@ -347,6 +707,7 @@ export interface ConversationSessionResponse {
   conversation: ConversationResponse;
   message?: MessageResponse;
   history: MessagePage;
+  intake?: IntakePrompt;
 }
 
 export type SocketAck<T> =
@@ -361,6 +722,8 @@ export interface MessageReceiptEvent {
 }
 
 export interface AuthSessionResponse {
+  /** True for platform administrators (PLATFORM_ADMIN_EMAILS), who manage plans and tenants. */
+  platformAdmin?: boolean;
   user: AuthenticatedUser;
   business: AuthenticatedBusiness;
   membership: { id: string; role: BusinessRole };

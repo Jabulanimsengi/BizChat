@@ -42,7 +42,9 @@ export function configureApplication(app: NestExpressApplication): void {
   app.use(
     cors((request: Request, callback) => {
       const origin = request.header('origin');
-      const widgetRequest = request.path.startsWith('/api/v1/widget');
+      // Public widget routes only: a bare prefix would also match dashboard routes such as
+      // /api/v1/widget-settings and strip the credentials their cross-origin requests need.
+      const widgetRequest = /^\/api\/v1\/widget(\/|$)/.test(request.path);
       if (widgetRequest && origin) {
         callback(null, { origin, credentials: false, methods: ['GET', 'POST', 'OPTIONS'] });
         return;

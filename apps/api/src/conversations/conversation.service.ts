@@ -1,3 +1,4 @@
+import { PlanService } from '../plans/plan.service';
 import {
   ConflictException,
   ForbiddenException,
@@ -13,6 +14,7 @@ import {
   type MessageReceipt,
 } from '@prisma/client';
 import type {
+  ConversationIntakeResponse,
   ConversationPage,
   ConversationResponse,
   ConversationSessionResponse,
@@ -56,15 +58,29 @@ import {
 } from '../routing/routing-events';
 import { ConversationTimelineService } from './conversation-timeline.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
+import { IntakeService } from '../intake/intake.service';
+import { IntakeFormService } from '../intake/intake-form.service';
+import { BusinessHoursService } from '../business-hours/business-hours.service';
+import { classificationRecord, TopicCatalogService } from '../intake/topic-catalog.service';
 
 const OPEN_VISITOR_STATUSES = [
   'NEW',
   'QUEUED',
+  'OFFERED',
   'ASSIGNED',
   'ACTIVE',
   'WAITING_FOR_CUSTOMER',
   'WAITING_FOR_AGENT',
 ] as const;
+
+/** A consultant can preview an offered conversation but must accept before replying. */
+function assertNotOffered(conversation: Conversation): void {
+  if (conversation.status === 'OFFERED')
+    throw new ConflictException({
+      code: 'OFFER_NOT_ACCEPTED',
+      message: 'Accept this chat before replying',
+    });
+}
 
 interface VisitorIdentity {
   businessId: string;
@@ -99,6 +115,11 @@ export class ConversationService {
     private readonly presence: PresenceService,
     private readonly timeline: ConversationTimelineService,
     private readonly routing: ConversationRoutingService,
+    private readonly topics: TopicCatalogService,
+    private readonly intake: IntakeService,
+    private readonly forms: IntakeFormService,
+    private readonly hours: BusinessHoursService,
+    private readonly plans: PlanService,
   ) {}
 
   public async startVisitor(
@@ -114,6 +135,32 @@ export class ConversationService {
       include: { conversation: true, receipts: true },
     });
     if (previous) return this.sessionResponse(identity, previous.conversation, previous);
+
+    // Decided before the transaction (it needs only the message and the cached topic catalogue) and
+    // used only if this message starts a new conversation. An explicit department skips topics.
+    // Outside business hours nobody is waiting to answer, so an unclear message is not questioned:
+    // it takes the default topic and the visitor is offered a follow-up instead.
+    const intake = input.departmentPublicId
+      ? null
+      : await this.topics.decide(identity.businessId, input.content, {
+          ...(input.topicPublicId ? { topicPublicId: input.topicPublicId } : {}),
+          canAsk: await this.hours.isOpenNow(identity.businessId),
+        });
+    // Pre-chat form: answered with the first message (BEFORE_CHAT), or asked once the topic is known.
+    const beforeChatForm = await this.forms.beforeChatForm(identity.businessId);
+    const afterTopic =
+      beforeChatForm || intake?.intakeStatus === 'AWAITING_TOPIC'
+        ? null
+        : await this.forms.requirement(
+            identity.businessId,
+            intake?.routing.topicId ?? null,
+            identity.visitorId,
+          );
+    const intakeStatus = afterTopic
+      ? afterTopic.autoAnswers
+        ? 'COMPLETE'
+        : 'AWAITING_FORM'
+      : (intake?.intakeStatus ?? 'NOT_REQUIRED');
 
     let outcome: {
       conversation: Conversation;
@@ -230,13 +277,34 @@ export class ConversationService {
                     status: 'ACTIVE',
                   },
                 })
-              : await transaction.department.findFirst({
-                  where: { businessId: identity.businessId, status: 'ACTIVE', isDefault: true },
-                });
+              : intake?.routing.departmentId
+                ? { id: intake.routing.departmentId }
+                : await transaction.department.findFirst({
+                    where: { businessId: identity.businessId, status: 'ACTIVE', isDefault: true },
+                  });
             if (input.departmentPublicId && !department)
               throw new NotFoundException({
                 code: 'DEPARTMENT_NOT_FOUND',
                 message: 'The selected department is unavailable',
+              });
+            // Only a message that starts a conversation must carry the before-chat answers.
+            const beforeChatAnswers = beforeChatForm
+              ? this.forms.validate(
+                  beforeChatForm,
+                  input.intake ?? { answers: {} },
+                  await this.forms.prefill(beforeChatForm, identity.visitorId),
+                )
+              : null;
+            // The plan message is for the business; the visitor only learns that chat is unavailable.
+            await this.plans
+              .assertWithin(identity.businessId, 'conversations')
+              .catch((error: unknown) => {
+                throw error instanceof ForbiddenException
+                  ? new ForbiddenException({
+                      code: 'CHAT_UNAVAILABLE',
+                      message: 'Chat is not taking new conversations right now. Please try later.',
+                    })
+                  : error;
               });
             conversation = await transaction.conversation.create({
               data: {
@@ -244,6 +312,16 @@ export class ConversationService {
                 visitorId: identity.visitorId,
                 source: 'WEB_WIDGET',
                 departmentId: department?.id,
+                intakeStatus,
+                ...(intake
+                  ? {
+                      topicId: intake.routing.topicId,
+                      priority: intake.routing.priority,
+                      requiredSkillId: intake.routing.requiredSkillId,
+                      requiredSkillMinProficiency: intake.routing.requiredSkillMinProficiency,
+                      intakeExpiresAt: intake.intakeExpiresAt,
+                    }
+                  : {}),
                 participants: {
                   create: {
                     businessId: identity.businessId,
@@ -261,6 +339,28 @@ export class ConversationService {
               actorId: identity.visitorId,
               metadata: { source: 'WEB_WIDGET', departmentId: department?.id ?? null },
             });
+            if (intake)
+              await transaction.conversationClassification.create({
+                data: classificationRecord(identity.businessId, conversation.id, intake),
+              });
+            if (beforeChatForm && beforeChatAnswers)
+              await this.forms.record(
+                transaction,
+                identity.businessId,
+                conversation.id,
+                beforeChatForm,
+                beforeChatAnswers,
+                input.intake?.consent ?? false,
+              );
+            else if (afterTopic?.autoAnswers)
+              await this.forms.record(
+                transaction,
+                identity.businessId,
+                conversation.id,
+                afterTopic.form,
+                afterTopic.autoAnswers,
+                false,
+              );
             conversationCreated = true;
           }
         }
@@ -313,7 +413,15 @@ export class ConversationService {
         assignedAgentMembershipId: null,
       } satisfies ConversationOperationApplicationEvent);
     }
-    return this.sessionResponse(identity, outcome.conversation, outcome.message);
+    const response = await this.sessionResponse(identity, outcome.conversation, outcome.message);
+    // A new conversation's prompt lists the best-matching topics first.
+    const prompt =
+      outcome.conversationCreated && afterTopic && !afterTopic.autoAnswers
+        ? this.intake.formPrompt(afterTopic)
+        : outcome.conversationCreated
+          ? this.intake.prompt(intake)
+          : undefined;
+    return prompt ? { ...response, intake: prompt } : response;
   }
 
   public async sendVisitor(
@@ -370,7 +478,12 @@ export class ConversationService {
       },
       true,
     );
-    return { conversation: await this.conversationResponse(conversation), history };
+    const intake = await this.intake.pendingPrompt(conversation);
+    return {
+      conversation: await this.conversationResponse(conversation),
+      history,
+      ...(intake ? { intake } : {}),
+    };
   }
 
   public async getVisitorHistory(
@@ -392,6 +505,7 @@ export class ConversationService {
     input: AgentMessageSendInput,
   ): Promise<MessageResponse> {
     let conversation = await this.findDashboardConversation(auth, conversationId);
+    assertNotOffered(conversation);
     if (conversation.status === 'ASSIGNED') {
       conversation = await this.prisma.$transaction(async (transaction) => {
         const updated = await transaction.conversation.update({
@@ -443,6 +557,7 @@ export class ConversationService {
     input: AttachmentMessageCommand,
   ): Promise<AttachmentSendResult> {
     let conversation = await this.findDashboardConversation(auth, conversationId);
+    assertNotOffered(conversation);
     if (conversation.status === 'ASSIGNED') {
       conversation = await this.prisma.$transaction(async (transaction) => {
         const updated = await transaction.conversation.update({
@@ -581,6 +696,7 @@ export class ConversationService {
           take: 1,
         },
         department: { select: { name: true } },
+        topic: { select: { name: true } },
         queueEntry: true,
         tags: { include: { tag: true }, orderBy: { createdAt: 'asc' } },
       },
@@ -610,6 +726,7 @@ export class ConversationService {
         return {
           ...serializeConversation(conversation),
           departmentName: conversation.department?.name ?? null,
+          topicName: conversation.topic?.name ?? null,
           queuedAt:
             conversation.status === 'QUEUED'
               ? (conversation.queueEntry?.enqueuedAt.toISOString() ?? null)
@@ -823,6 +940,15 @@ export class ConversationService {
     return this.conversationResponse(await this.findDashboardConversation(auth, conversationId));
   }
 
+  /** Pre-chat answers for a conversation the consultant may see. */
+  public async getDashboardIntake(
+    auth: AuthContext,
+    conversationId: string,
+  ): Promise<ConversationIntakeResponse | null> {
+    await this.findDashboardConversation(auth, conversationId);
+    return this.forms.forConversation(conversationId);
+  }
+
   public async authorizeVisitor(
     identity: VisitorIdentity,
     conversationId: string,
@@ -862,10 +988,12 @@ export class ConversationService {
     message?: Message & { receipts?: MessageReceipt[] },
   ): Promise<ConversationSessionResponse> {
     const history = await this.history(identity.businessId, conversation.id, { limit: 50 }, true);
+    const intake = await this.intake.pendingPrompt(conversation);
     return {
       conversation: await this.conversationResponse(conversation),
       ...(message ? { message: serializeMessage(message) } : {}),
       history,
+      ...(intake ? { intake } : {}),
     };
   }
 
@@ -956,10 +1084,16 @@ export class ConversationService {
   }
 
   private async conversationResponse(conversation: Conversation): Promise<ConversationResponse> {
-    const [department, queueEntry, tags] = await Promise.all([
+    const [department, topic, queueEntry, tags] = await Promise.all([
       conversation.departmentId
         ? this.prisma.department.findUnique({
             where: { id: conversation.departmentId },
+            select: { name: true },
+          })
+        : null,
+      conversation.topicId
+        ? this.prisma.topic.findUnique({
+            where: { id: conversation.topicId },
             select: { name: true },
           })
         : null,
@@ -977,6 +1111,7 @@ export class ConversationService {
     return {
       ...serializeConversation(conversation),
       departmentName: department?.name ?? null,
+      topicName: topic?.name ?? null,
       queuedAt: queueEntry?.enqueuedAt.toISOString() ?? null,
       queuePosition: queueEntry ? await this.queuePosition(queueEntry) : null,
       tags: tags.map(({ tag }) => ({

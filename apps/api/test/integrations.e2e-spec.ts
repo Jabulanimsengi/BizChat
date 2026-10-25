@@ -272,6 +272,8 @@ describe('Integration API (real PostgreSQL and Redis)', () => {
     expect(delivered.deliveredAt).not.toBeNull();
   });
   it('issues tenant-bound identity proofs and resumes that customer in the widget', async () => {
+    // Domains are unique across tenants; a previous run against the same database may own it.
+    await prisma.businessDomain.deleteMany({ where: { domain: 'localhost' } });
     await prisma.businessDomain.create({
       data: {
         businessId: auth.business.id,

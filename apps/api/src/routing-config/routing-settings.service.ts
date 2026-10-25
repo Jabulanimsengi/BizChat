@@ -1,0 +1,83 @@
+import { BadRequestException, Injectable } from '@nestjs/common';
+import type { RoutingSettingsResponse } from '@bizchat/types';
+import type { UpdateRoutingSettingsInput } from '@bizchat/validation';
+import { AuditService, auditActor } from '../audit/audit.service';
+import type { AuthContext } from '../common/http.types';
+import { PrismaService } from '../database/prisma.service';
+import { DEFAULT_ROUTING_SETTINGS } from './routing-settings.defaults';
+
+const settingsSelect = {
+  routingStrategy: true,
+  assignmentMode: true,
+  offerTimeoutSeconds: true,
+  missedOffersBeforeAway: true,
+  exclusionSeconds: true,
+  autoRouteThreshold: true,
+  confirmThreshold: true,
+  topicPromptTimeoutSeconds: true,
+  intakeFormTiming: true,
+  defaultIntakeFormId: true,
+} as const;
+
+@Injectable()
+export class RoutingSettingsService {
+  public constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
+
+  /** Tenants without a stored row use the defaults, so no backfill is needed. */
+  public async get(auth: AuthContext): Promise<RoutingSettingsResponse> {
+    const settings = await this.prisma.routingSettings.findUnique({
+      where: { businessId: auth.business.id },
+      select: settingsSelect,
+    });
+    return settings ?? DEFAULT_ROUTING_SETTINGS;
+  }
+
+  public async update(
+    auth: AuthContext,
+    input: UpdateRoutingSettingsInput,
+    requestId: string,
+    ipAddress?: string,
+  ): Promise<RoutingSettingsResponse> {
+    if (input.autoRouteThreshold !== undefined || input.confirmThreshold !== undefined) {
+      // A single threshold change must still leave confirm below auto-route.
+      const current = await this.get(auth);
+      const auto = input.autoRouteThreshold ?? current.autoRouteThreshold;
+      const confirm = input.confirmThreshold ?? current.confirmThreshold;
+      if (confirm >= auto)
+        throw new BadRequestException({
+          code: 'INVALID_THRESHOLDS',
+          message: 'The confirm threshold must be below the auto-route threshold',
+        });
+    }
+    if (input.defaultIntakeFormId) {
+      const form = await this.prisma.intakeForm.count({
+        where: { id: input.defaultIntakeFormId, businessId: auth.business.id, status: 'ACTIVE' },
+      });
+      if (!form)
+        throw new BadRequestException({
+          code: 'INTAKE_FORM_NOT_FOUND',
+          message: 'The selected form does not exist',
+        });
+    }
+    const settings = await this.prisma.routingSettings.upsert({
+      where: { businessId: auth.business.id },
+      update: input,
+      create: { ...DEFAULT_ROUTING_SETTINGS, ...input, businessId: auth.business.id },
+      select: settingsSelect,
+    });
+    await this.audit.record({
+      businessId: auth.business.id,
+      ...auditActor(auth),
+      action: 'routing.settings_updated',
+      targetType: 'RoutingSettings',
+      targetId: auth.business.id,
+      requestId,
+      ipAddress,
+      metadata: input,
+    });
+    return settings;
+  }
+}

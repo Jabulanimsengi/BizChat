@@ -2,10 +2,13 @@
 
 import type {
   AgentConnectedEvent,
+  AgentNoticeEvent,
   AgentPresenceEvent,
   AgentPresenceState,
   AgentProfileResponse,
   CannedResponseResponse,
+  ConversationOfferEvent,
+  ConversationOfferWithdrawnEvent,
   ConversationOperationEvent,
   ConversationPage,
   ConversationRecoveryEvent,
@@ -42,6 +45,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { API_ORIGIN, apiRequest } from '../lib/api';
+import { FollowUpDetails, waitFlags } from './follow-up-details';
+import { IntakeAnswers } from './intake-answers';
+import { VisitorPrivacy } from './visitor-privacy';
+import { playOfferChime } from '../lib/offer-alert';
+import { OfferTray } from './offer-tray';
 import { Button } from './ui/button';
 
 type ReliableMessage = MessageResponse & { pending?: boolean; failed?: boolean };
@@ -76,8 +84,13 @@ export function ConversationManager() {
   const [noteMode, setNoteMode] = useState(false);
   const [operationBusy, setOperationBusy] = useState(false);
   const [transferTarget, setTransferTarget] = useState('');
+  const [offers, setOffers] = useState<ConversationOfferEvent[]>([]);
+  const [offerBusy, setOfferBusy] = useState<string>();
+  const [notice, setNotice] = useState<string>();
   const socketRef = useRef<Socket | undefined>(undefined);
   const selectedRef = useRef<string | undefined>(undefined);
+  // Offers are re-sent when the socket reconnects; chime only for ones not seen before.
+  const chimedOffers = useRef(new Set<string>());
   const profileIdRef = useRef<string | undefined>(undefined);
   const threadsRef = useRef<Record<string, ThreadState>>({});
   const scrollArea = useRef<HTMLDivElement>(null);
@@ -217,6 +230,20 @@ export function ConversationManager() {
     socket.on('agent.presence', (event: AgentPresenceEvent) => {
       if (event.agentProfileId === profileIdRef.current) setPresence(event.state);
     });
+    socket.on('agent.notice', (event: AgentNoticeEvent) => setNotice(event.message));
+    socket.on('conversation.offered', (offer: ConversationOfferEvent) => {
+      if (!chimedOffers.current.has(offer.offerId)) {
+        chimedOffers.current.add(offer.offerId);
+        playOfferChime();
+      }
+      setOffers((current) => [
+        ...current.filter(({ offerId }) => offerId !== offer.offerId),
+        offer,
+      ]);
+    });
+    socket.on('conversation.offer.withdrawn', (event: ConversationOfferWithdrawnEvent) =>
+      setOffers((current) => current.filter(({ offerId }) => offerId !== event.offerId)),
+    );
     socket.on('conversation.new', (conversation: ConversationResponse) =>
       setConversations((current) => mergeConversations([conversation], current)),
     );
@@ -337,6 +364,31 @@ export function ConversationManager() {
 
   const selected = selectedId ? threads[selectedId] : undefined;
   const selectedRecovery = selected ? recovery[selected.conversation.id] : undefined;
+
+  async function respondToOffer(
+    offer: ConversationOfferEvent,
+    response: 'offer.accept' | 'offer.decline',
+  ): Promise<void> {
+    setOfferBusy(offer.offerId);
+    const result = await emitAck<ConversationRoutingEvent>(socketRef.current, response, {
+      offerId: offer.offerId,
+    });
+    setOfferBusy(undefined);
+    const gone =
+      result.ok ||
+      result.error.code === 'OFFER_NO_LONGER_AVAILABLE' ||
+      result.error.code === 'OFFER_NOT_FOUND';
+    if (gone) setOffers((current) => current.filter(({ offerId }) => offerId !== offer.offerId));
+    if (!result.ok) {
+      setNotice(result.error.message);
+      return;
+    }
+    if (response === 'offer.accept') {
+      setNotice(undefined);
+      setConversations((current) => mergeConversations([result.data.conversation], current));
+      await openConversation(result.data.conversation);
+    }
+  }
 
   async function openConversation(conversation: ConversationResponse): Promise<void> {
     if (selectedId && scrollArea.current)
@@ -769,6 +821,25 @@ export function ConversationManager() {
             </select>
           </div>
         </div>
+        <OfferTray
+          offers={offers}
+          busyOfferId={offerBusy}
+          onAccept={(offer) => void respondToOffer(offer, 'offer.accept')}
+          onDecline={(offer) => void respondToOffer(offer, 'offer.decline')}
+        />
+        {notice ? (
+          <div className="m-3 flex items-start justify-between gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+            <p>{notice}</p>
+            <button
+              type="button"
+              className="text-xs font-semibold"
+              onClick={() => setNotice(undefined)}
+              aria-label="Dismiss notice"
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
         {error && !selected ? (
           <p className="m-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>
         ) : null}
@@ -800,9 +871,11 @@ export function ConversationManager() {
                     ? 'Visitor is typing…'
                     : (conversation.lastMessagePreview ?? 'Conversation started')}
                 </p>
-                {conversation.departmentName ? (
+                {conversation.departmentName || conversation.topicName ? (
                   <p className="mt-1 truncate text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                    {conversation.departmentName}
+                    {[conversation.departmentName, conversation.topicName]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </p>
                 ) : null}
                 <div className="mt-2 flex items-center justify-between">
@@ -811,6 +884,14 @@ export function ConversationManager() {
                       ? `Queued #${conversation.queuePosition}`
                       : formatStatus(conversation.status)}
                   </span>
+                  {waitFlags(conversation).map((flag) => (
+                    <span
+                      key={flag}
+                      className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-800"
+                    >
+                      {flag}
+                    </span>
+                  ))}
                   {conversation.unreadCount > 0 ? (
                     <span className="grid min-w-5 place-items-center rounded-full bg-moss px-1.5 py-0.5 text-[10px] font-bold text-white">
                       {conversation.unreadCount}
@@ -1089,6 +1170,7 @@ export function ConversationManager() {
                 label="Department"
                 value={selected.conversation.departmentName ?? 'General'}
               />
+              <Context label="Topic" value={selected.conversation.topicName ?? 'Not set'} />
               <Context
                 label="Routing"
                 value={
@@ -1107,6 +1189,17 @@ export function ConversationManager() {
                 }).format(new Date(selected.conversation.createdAt))}
               />
             </dl>
+            <FollowUpDetails conversation={selected.conversation} />
+            <IntakeAnswers conversationId={selected.conversation.id} />
+            <VisitorPrivacy
+              conversationId={selected.conversation.id}
+              status={selected.conversation.status}
+              onErased={() => {
+                const erasedId = selected.conversation.id;
+                setConversations((current) => current.filter(({ id }) => id !== erasedId));
+                setSelectedId(undefined);
+              }}
+            />
             <div className="mt-6 rounded-2xl border border-line bg-white p-4">
               <div className="flex items-center gap-2">
                 <Users size={16} className="text-moss" />

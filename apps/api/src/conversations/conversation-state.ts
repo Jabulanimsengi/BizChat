@@ -2,8 +2,9 @@ import { ConflictException, Injectable } from '@nestjs/common';
 import type { ConversationStatus, Prisma } from '@prisma/client';
 
 const transitions: Record<ConversationStatus, ReadonlySet<ConversationStatus>> = {
-  NEW: new Set(['QUEUED', 'ASSIGNED']),
-  QUEUED: new Set(['ASSIGNED']),
+  NEW: new Set(['QUEUED', 'OFFERED', 'ASSIGNED']),
+  QUEUED: new Set(['OFFERED', 'ASSIGNED']),
+  OFFERED: new Set(['ASSIGNED', 'QUEUED', 'CLOSED']),
   ASSIGNED: new Set(['ACTIVE', 'RESOLVED']),
   ACTIVE: new Set(['WAITING_FOR_CUSTOMER', 'WAITING_FOR_AGENT', 'RESOLVED']),
   WAITING_FOR_CUSTOMER: new Set(['ACTIVE', 'RESOLVED']),

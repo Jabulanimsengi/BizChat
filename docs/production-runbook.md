@@ -10,6 +10,11 @@ For more than one API replica, replace the attachment filesystem implementation 
 S3-compatible object storage before scaling. Do not mount the same ordinary filesystem directory
 read-write on multiple hosts.
 
+`docker-compose.ha.yml` layers several API replicas and an nginx load balancer onto the production
+file (`docker compose -f docker-compose.production.yml -f docker-compose.ha.yml up -d --wait`). It
+does not replicate PostgreSQL, Redis, or object storage; see
+`docs/architecture/high-availability.md` for what each needs and how failures behave.
+
 ## Required configuration
 
 - Generate independent `SESSION_SECRET` and `WIDGET_TOKEN_SECRET` values with at least 32 random

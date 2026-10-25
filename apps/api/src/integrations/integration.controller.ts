@@ -1,3 +1,5 @@
+import type { IntegrationAvailabilityResponse } from '@bizchat/types';
+import { AvailabilityService } from './availability.service';
 import {
   Body,
   Controller,
@@ -28,7 +30,7 @@ import {
   type IntegrationRequest,
 } from './integration.guard';
 import {
-  customerSchema,
+  identifySchema,
   historySchema,
   keySchema,
   pageSchema,
@@ -37,6 +39,7 @@ import {
   startSchema,
   webhookSchema,
   type HistoryInput,
+  type IdentifyInput,
   type KeyInput,
   type PageInput,
   type ResolveInput,
@@ -125,6 +128,7 @@ export class IntegrationController {
   public constructor(
     private readonly service: IntegrationService,
     private readonly identities: CustomerIdentityService,
+    private readonly availabilityService: AvailabilityService,
   ) {}
   @Get('conversations')
   @IntegrationScopeRequired('conversations:read')
@@ -181,13 +185,20 @@ export class IntegrationController {
   ): Promise<unknown> {
     return this.service.resolve(request.integration, id, key, input);
   }
+  @Get('availability')
+  @IntegrationScopeRequired('availability:read')
+  public availability(
+    @Req() request: IntegrationRequest,
+  ): Promise<IntegrationAvailabilityResponse> {
+    return this.availabilityService.forBusiness(request.integration.businessId);
+  }
   @Post('customers/identify')
   @IntegrationScopeRequired('customers:identify')
   public identify(
     @Req() request: IntegrationRequest,
-    @Body(new ZodValidationPipe(customerSchema)) input: { externalId: string },
+    @Body(new ZodValidationPipe(identifySchema)) input: IdentifyInput,
   ): Promise<object> {
-    return this.identities.issue(request.integration, input.externalId);
+    return this.identities.issue(request.integration, input);
   }
 }
 @Controller('integrations')

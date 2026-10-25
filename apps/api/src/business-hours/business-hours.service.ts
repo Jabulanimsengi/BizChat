@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { BusinessHoursResponse } from '@bizchat/types';
 import type { UpdateBusinessHoursInput } from '@bizchat/validation';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, auditActor } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 
@@ -67,7 +67,7 @@ export class BusinessHoursService {
     );
     await this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action: 'business.hours_updated',
       targetType: 'Business',
       targetId: auth.business.id,
@@ -76,6 +76,15 @@ export class BusinessHoursService {
       metadata: { hours: input.hours },
     });
     return this.get(auth.business.id, auth.business.timezone);
+  }
+
+  /** Whether the tenant is open now in its own timezone; a tenant without hours is always open. */
+  public async isOpenNow(businessId: string): Promise<boolean> {
+    const business = await this.prisma.business.findUnique({
+      where: { id: businessId },
+      select: { timezone: true },
+    });
+    return business ? this.isBusinessOpen(businessId, business.timezone) : false;
   }
 
   public async isBusinessOpen(businessId: string, timezone: string): Promise<boolean> {

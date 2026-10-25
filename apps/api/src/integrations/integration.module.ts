@@ -13,12 +13,34 @@ import { IntegrationGuard } from './integration.guard';
 import { IntegrationService } from './integration.service';
 import { WebhookService } from './webhook.service';
 import { WebhookTransport } from './webhook-transport';
+import { IntakeModule } from '../intake/intake.module';
+import { BusinessHoursModule } from '../business-hours/business-hours.module';
+import { AvailabilityService } from './availability.service';
+import { DepartmentModule } from '../departments/department.module';
+import { RoutingConfigModule } from '../routing-config/routing-config.module';
+import { BusinessUsersModule } from '../users/business-users.module';
+import { SetupContextService, SetupController } from './setup.controller';
+import { PrivacyModule } from '../privacy/privacy.module';
+import { PrivacyIntegrationController } from './privacy-integration.controller';
 @Module({
-  imports: [AuthModule, ConversationModule, ConversationTimelineModule, CustomerIdentityModule],
+  imports: [
+    AuthModule,
+    ConversationModule,
+    ConversationTimelineModule,
+    CustomerIdentityModule,
+    IntakeModule,
+    BusinessHoursModule,
+    DepartmentModule,
+    RoutingConfigModule,
+    BusinessUsersModule,
+    PrivacyModule,
+  ],
   controllers: [
     IntegrationController,
     IntegrationSettingsController,
     IntegrationDocumentationController,
+    SetupController,
+    PrivacyIntegrationController,
   ],
   providers: [
     IntegrationService,
@@ -26,6 +48,8 @@ import { WebhookTransport } from './webhook-transport';
     IntegrationGuard,
     WebhookService,
     WebhookTransport,
+    AvailabilityService,
+    SetupContextService,
   ],
 })
 export class IntegrationModule {}

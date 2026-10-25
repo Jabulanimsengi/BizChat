@@ -24,6 +24,15 @@ export class AgentProfileService {
     private readonly businessHours: BusinessHoursService,
   ) {}
 
+  /** Presence for a profile the server changed itself, e.g. after missed offers. */
+  public async presenceEventFor(profileId: string): Promise<AgentPresenceEvent> {
+    const profile = await this.prisma.agentProfile.findUniqueOrThrow({
+      where: { id: profileId },
+      include: { user: true, departments: { select: { departmentId: true } } },
+    });
+    return this.presenceEvent(profile);
+  }
+
   public async getOrCreate(auth: AuthContext): Promise<ProfileWithUser> {
     return this.prisma.agentProfile.upsert({
       where: { membershipId: auth.membership.id },

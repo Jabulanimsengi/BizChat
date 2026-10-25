@@ -10,6 +10,8 @@ import {
   createDepartmentSchema,
   createDomainSchema,
   createTagSchema,
+  analyticsQuerySchema,
+  followUpRequestSchema,
   internalNoteSchema,
   loginSchema,
   messageHistoryQuerySchema,
@@ -22,7 +24,128 @@ import {
   createBusinessUserSchema,
   auditLogQuerySchema,
   widgetBootstrapSchema,
+  createSkillSchema,
+  updateBusinessUserSchema,
+  updateRoutingSettingsSchema,
+  offerResponseSchema,
+  createTopicSchema,
+  updateTopicSchema,
+  intakeSubmitSchema,
+  createIntakeFormSchema,
+  matchesMask,
+  validateIntakeAnswers,
 } from './index';
+
+describe('topic validation', () => {
+  it('fills topic defaults and bounds keyword weights', () => {
+    const parsed = createTopicSchema.parse({ name: 'Company registration' });
+    expect(parsed).toMatchObject({
+      priority: 'NORMAL',
+      keywords: [],
+      showAsQuickReply: true,
+      isDefault: false,
+    });
+    expect(
+      createTopicSchema.safeParse({ name: 'Tax', keywords: [{ phrase: 'vat', weight: 6 }] })
+        .success,
+    ).toBe(false);
+    expect(
+      createTopicSchema.safeParse({ name: 'Tax', requiredSkillMinProficiency: 0 }).success,
+    ).toBe(false);
+  });
+
+  it('requires at least one field on update and rejects unknown fields', () => {
+    expect(updateTopicSchema.safeParse({}).success).toBe(false);
+    expect(updateTopicSchema.safeParse({ status: 'DISABLED' }).success).toBe(true);
+    expect(updateTopicSchema.safeParse({ businessId: 'x' }).success).toBe(false);
+  });
+
+  it('accepts a topic choice or "something else" (null)', () => {
+    const conversationId = '7d3c1c8e-5b1f-4c1a-9a43-2f7f5b1c9e10';
+    expect(
+      intakeSubmitSchema.safeParse({ conversationId, topicPublicId: 'topic_abcdefgh12' }).success,
+    ).toBe(true);
+    expect(intakeSubmitSchema.safeParse({ conversationId, topicPublicId: null }).success).toBe(
+      true,
+    );
+    expect(intakeSubmitSchema.safeParse({ conversationId, topicPublicId: 'dept_x' }).success).toBe(
+      false,
+    );
+  });
+
+  it('keeps the confirm threshold below the auto-route threshold', () => {
+    expect(
+      updateRoutingSettingsSchema.safeParse({ autoRouteThreshold: 0.5, confirmThreshold: 0.6 })
+        .success,
+    ).toBe(false);
+    expect(
+      updateRoutingSettingsSchema.safeParse({ autoRouteThreshold: 0.7, confirmThreshold: 0.3 })
+        .success,
+    ).toBe(true);
+  });
+});
+
+describe('skill routing validation', () => {
+  const skillId = '7d3c1c8e-5b1f-4c1a-9a43-2f7f5b1c9e10';
+
+  it('accepts consultant proficiency from 1 to 5 only', () => {
+    expect(
+      updateBusinessUserSchema.safeParse({ skills: [{ skillId, proficiency: 5 }] }).success,
+    ).toBe(true);
+    expect(
+      updateBusinessUserSchema.safeParse({ skills: [{ skillId, proficiency: 0 }] }).success,
+    ).toBe(false);
+    expect(
+      updateBusinessUserSchema.safeParse({ skills: [{ skillId, proficiency: 6 }] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects listing the same skill twice for a consultant', () => {
+    const result = updateBusinessUserSchema.safeParse({
+      skills: [
+        { skillId, proficiency: 2 },
+        { skillId, proficiency: 4 },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('validates skill names and routing strategies', () => {
+    expect(createSkillSchema.safeParse({ name: ' Tax returns ' }).data?.name).toBe('Tax returns');
+    expect(createSkillSchema.safeParse({ name: 'T' }).success).toBe(false);
+    expect(updateRoutingSettingsSchema.safeParse({ routingStrategy: 'BEST_SKILL' }).success).toBe(
+      true,
+    );
+    expect(updateRoutingSettingsSchema.safeParse({ routingStrategy: 'RANDOM' }).success).toBe(
+      false,
+    );
+  });
+
+  it('bounds offer settings and requires at least one field', () => {
+    expect(
+      updateRoutingSettingsSchema.safeParse({
+        assignmentMode: 'OFFER',
+        offerTimeoutSeconds: 10,
+        missedOffersBeforeAway: 0,
+        exclusionSeconds: 3600,
+      }).success,
+    ).toBe(true);
+    expect(updateRoutingSettingsSchema.safeParse({ offerTimeoutSeconds: 5 }).success).toBe(false);
+    expect(updateRoutingSettingsSchema.safeParse({ missedOffersBeforeAway: 11 }).success).toBe(
+      false,
+    );
+    expect(updateRoutingSettingsSchema.safeParse({ exclusionSeconds: 30 }).success).toBe(false);
+    expect(updateRoutingSettingsSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts offer responses with an optional short reason', () => {
+    expect(offerResponseSchema.safeParse({ offerId: skillId }).success).toBe(true);
+    expect(
+      offerResponseSchema.safeParse({ offerId: skillId, reason: 'x'.repeat(241) }).success,
+    ).toBe(false);
+    expect(offerResponseSchema.safeParse({ offerId: 'not-a-uuid' }).success).toBe(false);
+  });
+});
 
 describe('authentication validation', () => {
   it('normalizes email addresses during registration', () => {
@@ -194,5 +317,169 @@ describe('authentication validation', () => {
         timezone: 'Not/A_Timezone',
       }),
     ).toThrow();
+  });
+});
+
+describe('pre-chat form validation', () => {
+  const form = {
+    consentText: 'I agree to the privacy notice.',
+    fields: [
+      { key: 'full_name', label: 'Full name', type: 'TEXT', required: true },
+      { key: 'phone', label: 'Phone', type: 'PHONE', required: false },
+      {
+        key: 'service',
+        label: 'Service',
+        type: 'SELECT',
+        required: true,
+        options: ['Registration', 'Annual return'],
+      },
+      {
+        key: 'registration_number',
+        label: 'Registration number',
+        type: 'REFERENCE',
+        required: false,
+        mask: '####/######/##',
+      },
+    ],
+  };
+
+  it('matches masks character by character', () => {
+    expect(matchesMask('2019/123456/07', '####/######/##')).toBe(true);
+    expect(matchesMask('2019/12345/07', '####/######/##')).toBe(false);
+    expect(matchesMask('20A9/123456/07', '####/######/##')).toBe(false);
+    expect(matchesMask('AB12', 'AA##')).toBe(true);
+    expect(matchesMask('A1B2', '****')).toBe(true);
+    expect(matchesMask('A1B-', '****')).toBe(false);
+  });
+
+  it('checks a long hostile input in linear time', () => {
+    const started = Date.now();
+    expect(matchesMask('9'.repeat(100_000), '#'.repeat(40))).toBe(false);
+    expect(Date.now() - started).toBeLessThan(50);
+  });
+
+  it('accepts valid answers in form order and requires consent', () => {
+    const valid = validateIntakeAnswers(form, {
+      answers: { service: 'Registration', full_name: ' Thandi ' },
+      consent: true,
+    });
+    expect(valid).toEqual({
+      ok: true,
+      answers: [
+        { key: 'full_name', label: 'Full name', value: 'Thandi' },
+        { key: 'service', label: 'Service', value: 'Registration' },
+      ],
+    });
+    const noConsent = validateIntakeAnswers(form, {
+      answers: { service: 'Registration', full_name: 'Thandi' },
+    });
+    expect(noConsent.ok).toBe(false);
+  });
+
+  it('reports every problem by field, including unknown fields', () => {
+    const result = validateIntakeAnswers(form, {
+      answers: { phone: 'call me', service: 'Other', registration_number: '1', surprise: 'x' },
+      consent: true,
+    });
+    expect(result.ok ? [] : Object.keys(result.errors).sort()).toEqual([
+      'full_name',
+      'phone',
+      'registration_number',
+      'service',
+      'surprise',
+    ]);
+  });
+
+  it('uses prefilled values for fields the visitor left out', () => {
+    const result = validateIntakeAnswers(
+      form,
+      { answers: { service: 'Annual return' }, consent: true },
+      { full_name: 'Thandi Mokoena' },
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('validates form definitions by field type', () => {
+    expect(
+      createIntakeFormSchema.safeParse({
+        name: 'Company details',
+        fields: [{ key: 'service', label: 'Service', type: 'SELECT', required: true }],
+      }).success,
+    ).toBe(false);
+    expect(
+      createIntakeFormSchema.safeParse({
+        name: 'Company details',
+        fields: [
+          { key: 'a', label: 'A', type: 'TEXT' },
+          { key: 'a', label: 'B', type: 'TEXT' },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      createIntakeFormSchema.safeParse({
+        name: 'Company details',
+        fields: [
+          { key: 'number', label: 'Number', type: 'REFERENCE', mask: '####', prefillFrom: 'name' },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts overflow steps that widen eligibility in increasing wait order', () => {
+    const general = '0b6c6f7e-2b1a-4c8e-9f3a-6a7d8e9f0a1b';
+    const base = { name: 'Company registration' };
+    expect(
+      createTopicSchema.safeParse({
+        ...base,
+        overflowSteps: [
+          { afterSeconds: 60, addDepartmentIds: [general] },
+          { afterSeconds: 180, relaxSkill: true },
+        ],
+        maxWaitSeconds: 600,
+      }).success,
+    ).toBe(true);
+    // Out of order, a step that changes nothing, and a maximum wait below 30 seconds.
+    expect(
+      createTopicSchema.safeParse({
+        ...base,
+        overflowSteps: [
+          { afterSeconds: 180, relaxSkill: true },
+          { afterSeconds: 60, anyConsultant: true },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      createTopicSchema.safeParse({ ...base, overflowSteps: [{ afterSeconds: 60 }] }).success,
+    ).toBe(false);
+    expect(createTopicSchema.safeParse({ ...base, maxWaitSeconds: 5 }).success).toBe(false);
+  });
+
+  it('requires an email address or phone number for a follow-up', () => {
+    const conversationId = '0b6c6f7e-2b1a-4c8e-9f3a-6a7d8e9f0a1b';
+    expect(
+      followUpRequestSchema.safeParse({ conversationId, email: 'a@example.test' }).success,
+    ).toBe(true);
+    expect(
+      followUpRequestSchema.safeParse({ conversationId, phone: '+27 11 555 0100' }).success,
+    ).toBe(true);
+    expect(followUpRequestSchema.safeParse({ conversationId, name: 'Thandi' }).success).toBe(false);
+    expect(followUpRequestSchema.safeParse({ conversationId, phone: 'call me' }).success).toBe(
+      false,
+    );
+  });
+
+  it('accepts analytics ranges of local dates up to 92 days', () => {
+    expect(analyticsQuerySchema.safeParse({ from: '2026-08-01', to: '2026-10-31' }).success).toBe(
+      true,
+    );
+    expect(analyticsQuerySchema.safeParse({ from: '2026-08-01', to: '2026-11-01' }).success).toBe(
+      false,
+    );
+    expect(analyticsQuerySchema.safeParse({ from: '2026-10-21', to: '2026-10-20' }).success).toBe(
+      false,
+    );
+    expect(analyticsQuerySchema.safeParse({ from: '20/10/2026', to: '2026-10-21' }).success).toBe(
+      false,
+    );
   });
 });

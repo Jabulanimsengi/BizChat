@@ -1,3 +1,9 @@
+import { PlanService } from '../plans/plan.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+  CONVERSATION_CAPACITY_RELEASED_EVENT,
+  type ConversationCapacityReleasedApplicationEvent,
+} from '../routing/routing-events';
 import {
   ConflictException,
   ForbiddenException,
@@ -8,15 +14,22 @@ import { Prisma } from '@prisma/client';
 import { hash } from 'argon2';
 import type { BusinessUserResponse } from '@bizchat/types';
 import type { CreateBusinessUserInput, UpdateBusinessUserInput } from '@bizchat/validation';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, auditActor } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
+
+const agentProfileInclude = {
+  departments: { select: { departmentId: true } },
+  skills: { select: { skillId: true, proficiency: true }, orderBy: { createdAt: 'asc' } },
+} as const;
 
 @Injectable()
 export class BusinessUsersService {
   public constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly events: EventEmitter2,
+    private readonly plans: PlanService,
   ) {}
 
   public async list(businessId: string): Promise<BusinessUserResponse[]> {
@@ -24,7 +37,7 @@ export class BusinessUsersService {
       where: { businessId },
       include: {
         user: true,
-        agentProfile: { include: { departments: { select: { departmentId: true } } } },
+        agentProfile: { include: agentProfileInclude },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -38,6 +51,7 @@ export class BusinessUsersService {
     ipAddress?: string,
   ): Promise<BusinessUserResponse> {
     await this.validateDepartments(auth.business.id, input.departmentIds);
+    await this.plans.assertWithin(auth.business.id, 'consultants');
     const passwordHash = await hash(input.password, { type: 2 });
     try {
       const membership = await this.prisma.$transaction(async (transaction) => {
@@ -64,13 +78,13 @@ export class BusinessUsersService {
           where: { id: created.id },
           include: {
             user: true,
-            agentProfile: { include: { departments: { select: { departmentId: true } } } },
+            agentProfile: { include: agentProfileInclude },
           },
         });
       });
       await this.audit.record({
         businessId: auth.business.id,
-        actorUserId: auth.user.id,
+        ...auditActor(auth),
         action: 'user.created',
         targetType: 'BusinessMembership',
         targetId: membership.id,
@@ -125,7 +139,10 @@ export class BusinessUsersService {
           message: 'The business must retain an active owner',
         });
     }
+    if (input.status === 'ACTIVE' && existing.status !== 'ACTIVE')
+      await this.plans.assertWithin(auth.business.id, 'consultants');
     if (input.departmentIds) await this.validateDepartments(auth.business.id, input.departmentIds);
+    if (input.skills) await this.validateSkills(auth.business.id, input.skills);
     const updated = await this.prisma.$transaction(async (transaction) => {
       if (input.displayName)
         await transaction.user.update({
@@ -162,6 +179,20 @@ export class BusinessUsersService {
             })),
           });
       }
+      if (input.skills) {
+        await transaction.agentSkill.deleteMany({
+          where: { businessId: auth.business.id, agentProfileId: existing.agentProfile!.id },
+        });
+        if (input.skills.length)
+          await transaction.agentSkill.createMany({
+            data: input.skills.map(({ skillId, proficiency }) => ({
+              businessId: auth.business.id,
+              agentProfileId: existing.agentProfile!.id,
+              skillId,
+              proficiency,
+            })),
+          });
+      }
       if (input.status === 'DISABLED')
         await transaction.session.updateMany({
           where: { membershipId: existing.id, revokedAt: null },
@@ -171,13 +202,26 @@ export class BusinessUsersService {
         where: { id: existing.id },
         include: {
           user: true,
-          agentProfile: { include: { departments: { select: { departmentId: true } } } },
+          agentProfile: { include: agentProfileInclude },
         },
       });
     });
+    // Who may take queued chats changed, so drain now instead of waiting for the sweep.
+    if (
+      input.departmentIds ||
+      input.skills ||
+      input.routingEnabled !== undefined ||
+      input.maxConcurrentChats !== undefined ||
+      input.status !== undefined
+    )
+      this.events.emit(CONVERSATION_CAPACITY_RELEASED_EVENT, {
+        businessId: auth.business.id,
+        agentMembershipId: existing.id,
+        conversationId: 'routing-eligibility-change',
+      } satisfies ConversationCapacityReleasedApplicationEvent);
     await this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action: 'user.updated',
       targetType: 'BusinessMembership',
       targetId: membershipId,
@@ -200,6 +244,18 @@ export class BusinessUsersService {
       });
   }
 
+  private async validateSkills(businessId: string, skills: { skillId: string }[]): Promise<void> {
+    if (!skills.length) return;
+    const count = await this.prisma.skill.count({
+      where: { businessId, id: { in: skills.map(({ skillId }) => skillId) }, status: 'ACTIVE' },
+    });
+    if (count !== skills.length)
+      throw new NotFoundException({
+        code: 'SKILL_NOT_FOUND',
+        message: 'One or more skills do not exist',
+      });
+  }
+
   private serialize(membership: {
     id: string;
     userId: string;
@@ -212,6 +268,7 @@ export class BusinessUsersService {
       maxConcurrentChats: number;
       routingEnabled: boolean;
       departments: { departmentId: string }[];
+      skills: { skillId: string; proficiency: number }[];
     } | null;
   }): BusinessUserResponse {
     if (!membership.agentProfile)
@@ -228,6 +285,10 @@ export class BusinessUsersService {
       maxConcurrentChats: membership.agentProfile.maxConcurrentChats,
       routingEnabled: membership.agentProfile.routingEnabled,
       departmentIds: membership.agentProfile.departments.map(({ departmentId }) => departmentId),
+      skills: membership.agentProfile.skills.map(({ skillId, proficiency }) => ({
+        skillId,
+        proficiency,
+      })),
       createdAt: membership.createdAt.toISOString(),
     };
   }

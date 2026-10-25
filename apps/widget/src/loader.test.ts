@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, formatTime } from './loader';
+import type { ConversationRoutingEvent } from '@bizchat/types';
+import { formatBytes, formatTime, queuePositionText } from './loader';
 
 describe('widget helpers', () => {
   it('formats byte sizes into a compact label', () => {
@@ -16,5 +17,13 @@ describe('widget helpers', () => {
 
   it('registers the custom element exactly once', () => {
     expect(customElements.get('bizchat-widget')).toBeDefined();
+  });
+
+  it('words the queue position loosely once a chat has overflowed', () => {
+    const queued = (queuePosition: number, overflowLevel: number): ConversationRoutingEvent =>
+      ({ queuePosition, conversation: { overflowLevel } }) as ConversationRoutingEvent;
+    expect(queuePositionText(queued(3, 0))).toBe(' You are number 3.');
+    expect(queuePositionText(queued(1, 1))).toBe(" You're next.");
+    expect(queuePositionText(queued(4, 2))).toBe(' About 3 ahead of you.');
   });
 });

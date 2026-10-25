@@ -1,3 +1,4 @@
+import { isPlatformAdmin } from '../plans/platform-admin.guard';
 import {
   Body,
   Controller,
@@ -68,8 +69,18 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(SessionAuthGuard)
-  public me(@CurrentAuth() auth: AuthContext): Omit<AuthContext, 'sessionId'> {
-    return { user: auth.user, membership: auth.membership, business: auth.business };
+  public me(
+    @CurrentAuth() auth: AuthContext,
+  ): Omit<AuthContext, 'sessionId'> & { platformAdmin: boolean } {
+    return {
+      user: auth.user,
+      membership: auth.membership,
+      business: auth.business,
+      platformAdmin: isPlatformAdmin(
+        auth,
+        this.config.get('PLATFORM_ADMIN_EMAILS', { infer: true }),
+      ),
+    };
   }
 
   @Post('password/forgot')

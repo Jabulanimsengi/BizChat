@@ -1,3 +1,4 @@
+import { PlanService } from '../plans/plan.service';
 import {
   ConflictException,
   Injectable,
@@ -27,7 +28,10 @@ export type KeyMetadata = Pick<IntegrationKey, keyof typeof keySelect>;
 
 @Injectable()
 export class IntegrationKeyService {
-  public constructor(private readonly prisma: PrismaService) {}
+  public constructor(
+    private readonly prisma: PrismaService,
+    private readonly plans: PlanService,
+  ) {}
 
   public list(businessId: string): Promise<KeyMetadata[]> {
     return this.prisma.integrationKey.findMany({
@@ -47,6 +51,7 @@ export class IntegrationKeyService {
       const count = await tx.integrationKey.count({
         where: { businessId: auth.business.id, revokedAt: null, expiresAt: { gt: new Date() } },
       });
+      await this.plans.assertWithin(auth.business.id, 'integrationKeys', tx);
       if (count >= 20)
         throw new ConflictException({
           code: 'KEY_LIMIT',

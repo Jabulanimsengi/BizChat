@@ -59,7 +59,27 @@ describe('Integration contracts and outbound security', () => {
     );
   });
   it('publishes all integration resources and the same input constraints', () => {
-    expect(Object.keys(integrationOpenApi.paths)).toHaveLength(5);
+    expect(Object.keys(integrationOpenApi.paths).sort()).toEqual([
+      '/availability',
+      '/conversations',
+      '/conversations/{id}',
+      '/conversations/{id}/messages',
+      '/conversations/{id}/resolve',
+      '/customers/identify',
+      '/setup/business-hours',
+      '/setup/consultants',
+      '/setup/consultants/{id}',
+      '/setup/departments',
+      '/setup/departments/{id}',
+      '/setup/intake-forms',
+      '/setup/intake-forms/{id}',
+      '/setup/routing-settings',
+      '/setup/skills',
+      '/setup/skills/{id}',
+      '/setup/topics',
+      '/setup/topics/test',
+      '/setup/topics/{id}',
+    ]);
     expect(integrationOpenApi.components.schemas.Start).toMatchObject({
       additionalProperties: false,
       required: ['externalId', 'content'],

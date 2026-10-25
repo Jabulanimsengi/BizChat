@@ -1,6 +1,11 @@
 'use client';
 
-import type { BusinessRole, BusinessUserResponse, DepartmentResponse } from '@bizchat/types';
+import type {
+  BusinessRole,
+  BusinessUserResponse,
+  DepartmentResponse,
+  SkillResponse,
+} from '@bizchat/types';
 import { LoaderCircle, Plus, ShieldCheck, UserRoundCog } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
@@ -11,6 +16,7 @@ import { Input } from './ui/input';
 export function UsersManager() {
   const [users, setUsers] = useState<BusinessUserResponse[]>([]);
   const [departments, setDepartments] = useState<DepartmentResponse[]>([]);
+  const [skills, setSkills] = useState<SkillResponse[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [draft, setDraft] = useState({
@@ -23,10 +29,12 @@ export function UsersManager() {
     void Promise.all([
       apiRequest<BusinessUserResponse[]>('/users'),
       apiRequest<DepartmentResponse[]>('/departments'),
+      apiRequest<SkillResponse[]>('/skills'),
     ])
-      .then(([members, groups]) => {
+      .then(([members, groups, skillList]) => {
         setUsers(members);
         setDepartments(groups);
+        setSkills(skillList.filter(({ status }) => status === 'ACTIVE'));
       })
       .catch((cause: unknown) => setNotice(messageOf(cause)));
   }, []);
@@ -71,6 +79,12 @@ export function UsersManager() {
       ? user.departmentIds.filter((id) => id !== departmentId)
       : [...user.departmentIds, departmentId];
     void update(user, { departmentIds });
+  }
+  function setProficiency(user: BusinessUserResponse, skillId: string, value: string): void {
+    const others = user.skills.filter((skill) => skill.skillId !== skillId);
+    void update(user, {
+      skills: value ? [...others, { skillId, proficiency: Number(value) }] : others,
+    });
   }
   if (!users.length && !notice)
     return (
@@ -208,6 +222,30 @@ export function UsersManager() {
                   </label>
                 ))}
             </div>
+            {skills.length ? (
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {skills.map((skill) => (
+                  <label key={skill.id} className="text-xs font-medium text-slate-500">
+                    {skill.name}
+                    <select
+                      className="mt-1 h-9 w-full rounded-xl border border-line bg-white px-2 text-sm text-ink"
+                      value={
+                        user.skills.find(({ skillId }) => skillId === skill.id)?.proficiency ?? ''
+                      }
+                      disabled={busy}
+                      onChange={(event) => setProficiency(user, skill.id, event.target.value)}
+                    >
+                      <option value="">Not skilled</option>
+                      {PROFICIENCY_LEVELS.map(([level, label]) => (
+                        <option key={level} value={level}>
+                          {level} - {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            ) : null}
             <div className="mt-4 flex items-center justify-between border-t border-line pt-4">
               <label className="flex items-center gap-2 text-sm">
                 <input
@@ -236,6 +274,14 @@ export function UsersManager() {
     </div>
   );
 }
+const PROFICIENCY_LEVELS = [
+  [1, 'Basic'],
+  [2, 'Developing'],
+  [3, 'Competent'],
+  [4, 'Advanced'],
+  [5, 'Expert'],
+] as const;
+
 function messageOf(value: unknown): string {
   return value instanceof Error ? value.message : 'The request could not be completed';
 }
