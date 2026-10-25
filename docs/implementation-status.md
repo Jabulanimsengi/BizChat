@@ -539,3 +539,26 @@ metering, removing a plan, and suspension and restoration). `docker compose conf
 production file. The end-to-end suite passes, including the new `phaseD-plans-smoke.mjs` (a second
 widget chat refused with a neutral message on a one-conversation plan). The platform page was
 type-checked and unit-tested but not used in a browser yet.
+
+## Phase D3 - High-availability reference deployment — 2026-10-25
+
+- `docker-compose.ha.yml` layers onto the production file: the API scales to `API_REPLICAS`
+  (default 2) behind `infra/nginx/api-lb.conf` on nginx 1.28, which takes over `127.0.0.1:4000`.
+  HTTP is balanced by least connections with retries only for requests that cannot have changed
+  anything; `/socket.io/` is balanced by client address for long-polling clients; nginx re-resolves
+  the scaled service every 10 seconds; metrics are not served through the balancer; replicas trust
+  both the edge proxy and the balancer.
+- `docs/architecture/high-availability.md` explains why replicas are safe (leases, conditional
+  claims, outbox, idempotency), what the overlay does not replicate (PostgreSQL, Redis, object
+  storage, ClamAV, hosts), and how each failure behaves. The runbook links to it.
+- `tools/ha-failover-smoke.mjs` runs last in `npm run e2e` when Docker is available, and
+  `E2E_ONLY=<harness>` now runs a single harness.
+
+Verification: format, lint, and type checks pass in every workspace; the balancer configuration
+passes `nginx -t` on nginx 1.28; the merged production and HA Compose files pass `docker compose
+config`; and the full end-to-end suite passes, including the new failover test (two nodes behind the
+balancer, one killed, then HTTP, the session, both sockets, resume, and message delivery confirmed).
+Writing that test first failed with intermittent 502s: Docker Desktop's host gateway also has an
+unreachable IPv6 address, which nginx treated as extra peers. The test now uses the IPv4 gateway,
+and the production resolver already sets `ipv6=off`. The complete HA stack with built images has not
+been started; that belongs in staging.

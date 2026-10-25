@@ -1,0 +1,40 @@
+# High-availability reference overlay. Run with the production file:
+#
+#   docker compose -f docker-compose.production.yml -f docker-compose.ha.yml up -d --wait
+#
+# It runs several API replicas behind an nginx load balancer on 127.0.0.1:4000, in place of the
+# single API published there. Put TLS termination (a managed load balancer or edge proxy) in front
+# of port 4000 as before. PostgreSQL, Redis, and object storage in the production file are single
+# instances; for real high availability point DATABASE_URL, REDIS_URL, and S3_* at managed,
+# replicated services. See docs/architecture/high-availability.md.
+services:
+  api:
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+    # Replicas are reached through the load balancer, never published directly.
+    ports: !reset []
+    environment:
+      # Two hops now reach the API: your edge proxy (TRUSTED_PROXIES, as before) and this load
+      # balancer on the internal Docker network. Trust both, or client IPs become the edge's.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:?TRUSTED_PROXIES is required},${HA_LB_SUBNET:-172.16.0.0/12}
+
+  api-lb:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./infra/nginx/api-lb.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - '127.0.0.1:4000:8080'
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '-', 'http://127.0.0.1:8080/api/v1/health/ready']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  web:
+    depends_on:
+      api-lb:
+        condition: service_healthy

@@ -122,7 +122,10 @@ async function main() {
     await waitForHealth(apiUrl);
     await waitForHealth(secondaryUrl);
 
+    // E2E_ONLY=<harness file> runs a single harness, for example while investigating a failure.
+    const only = process.env.E2E_ONLY;
     for (const phase of singleNodePhases) {
+      if (only && only !== phase) continue;
       await clearThrottleCounters();
       console.log(`Running ${phase}…`);
       await run('node', [`tools/${phase}`], {
@@ -130,11 +133,20 @@ async function main() {
       });
     }
 
-    await clearThrottleCounters();
-    console.log('Running phase7-smoke.mjs (two nodes)…');
-    await run('node', ['tools/phase7-smoke.mjs'], {
-      env: { ...environment, SMOKE_API_A: apiUrl, SMOKE_API_B: secondaryUrl },
-    });
+    if (!only || only === 'phase7-smoke.mjs') {
+      await clearThrottleCounters();
+      console.log('Running phase7-smoke.mjs (two nodes)…');
+      await run('node', ['tools/phase7-smoke.mjs'], {
+        env: { ...environment, SMOKE_API_A: apiUrl, SMOKE_API_B: secondaryUrl },
+      });
+    }
+
+    // Starts its own two nodes and an nginx balancer (infra/nginx/api-lb.conf); skips without Docker.
+    if (!only || only === 'ha-failover-smoke.mjs') {
+      await clearThrottleCounters();
+      console.log('Running ha-failover-smoke.mjs (balancer, one node killed)…');
+      await run('node', ['tools/ha-failover-smoke.mjs'], { env: environment });
+    }
 
     console.log('End-to-end smoke suite passed');
   } finally {
