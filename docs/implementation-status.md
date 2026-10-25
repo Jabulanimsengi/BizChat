@@ -422,9 +422,33 @@ first is fixed, the second still assumes a fresh stack. The chime was not heard 
 - The bar colour (`#1f8a5f`) was checked with the palette validator (lightness band, chroma floor,
   3:1 contrast); the brand green failed the chroma floor for chart marks.
 
-Verification: format, lint, and type checks pass in every workspace; 224 API unit tests, 21
+Verification: format, lint, and type checks pass in every workspace; 224 API unit tests, 20
 dashboard, and 32 validation tests pass. On a fresh Docker test stack all 21 migrations apply and all
 32 HTTP integration tests pass, including two analytics tests that seed a known history and check
 every figure exactly (local-day boundaries in Africa/Johannesburg, percentiles, notes excluded from
 first response, offer and classification counts, tenant isolation, and range validation). The
 end-to-end suite passes. The analytics page has not yet been viewed in a browser.
+
+## Phase C1 - Routing webhooks and availability — 2026-10-25
+
+- Six new webhook events from the same transactional outbox triggers: `conversation.queued`,
+  `conversation.offered`, `conversation.assigned` (both with the consultant's membership ID and
+  name), `conversation.overflowed`, `conversation.follow_up_requested`, and `conversation.closed`.
+  Follow-up contact details are never sent in a webhook. **Dashboard → Integrations** now lets you
+  choose events per endpoint (all by default) and shows each endpoint's subscription.
+- Webhook payload timestamps now end in `Z` (they were UTC before, without a zone marker).
+- `GET /integrations/availability` (new scope `availability:read`) reports business hours, online
+  and available consultants, overall and per department.
+- Integration conversations now include `priority`, `departmentId`, `topicId`, `overflowLevel`, and
+  `followUpRequested`; with `intake:read`, `followUp` adds the contact details. The dashboard's key
+  form now offers `intake:read` (missing since B4) and `availability:read`. Keys may hold every
+  scope (previously at most five).
+- Migration `20261025130000_phase_c_routing_webhooks` replaces the trigger function and widens the
+  conversation trigger to status, overflow level, and follow-up changes.
+
+Verification: format, lint, and type checks pass in every workspace; 224 API unit tests and 20
+dashboard tests pass; on a fresh Docker test stack all 22 migrations apply and all 35 HTTP tests pass,
+including a new suite that changes a conversation through each routing state and checks the outbox
+(ordering, consultant name, a rolled-back change leaving no event, unsubscribed events not enqueued,
+no contact details in payloads), the `intake:read` gate on follow-up details, and the availability
+scope. The existing webhook signing, retry, and replay tests still pass. The end-to-end suite passes.

@@ -227,6 +227,18 @@ export interface ConsultantAnalyticsRow {
   offers: { offered: number; accepted: number; declined: number; expired: number };
 }
 
+/** Integration API: whether a chat would reach someone now. */
+export interface IntegrationAvailabilityResponse {
+  open: boolean;
+  /** ONLINE when the business is open and at least one consultant is online. */
+  availability: 'ONLINE' | 'OFFLINE';
+  onlineAgents: number;
+  /** Online consultants below their concurrent-chat limit. */
+  availableAgents: number;
+  departments: { publicId: string; name: string; onlineAgents: number; availableAgents: number }[];
+  checkedAt: string;
+}
+
 export interface TopicTestResponse {
   decision: ClassificationDecision;
   confidence: number;

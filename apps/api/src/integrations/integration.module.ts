@@ -14,6 +14,8 @@ import { IntegrationService } from './integration.service';
 import { WebhookService } from './webhook.service';
 import { WebhookTransport } from './webhook-transport';
 import { IntakeModule } from '../intake/intake.module';
+import { BusinessHoursModule } from '../business-hours/business-hours.module';
+import { AvailabilityService } from './availability.service';
 @Module({
   imports: [
     AuthModule,
@@ -21,6 +23,7 @@ import { IntakeModule } from '../intake/intake.module';
     ConversationTimelineModule,
     CustomerIdentityModule,
     IntakeModule,
+    BusinessHoursModule,
   ],
   controllers: [
     IntegrationController,
@@ -33,6 +36,7 @@ import { IntakeModule } from '../intake/intake.module';
     IntegrationGuard,
     WebhookService,
     WebhookTransport,
+    AvailabilityService,
   ],
 })
 export class IntegrationModule {}

@@ -22,16 +22,27 @@ Create a key in **Dashboard → Integrations**, selecting only the permissions y
 Base URL: `https://YOUR_API_HOST/api/v1/integrations`.
 OpenAPI: `https://YOUR_API_HOST/api/v1/integrations/openapi.json`.
 
-| Operation                                  | Scope               |
-| ------------------------------------------ | ------------------- |
-| GET /conversations                         | conversations:read  |
-| GET /conversations/:id                     | conversations:read  |
-| GET /conversations/:id/messages            | messages:read       |
-| POST /conversations                        | conversations:write |
-| POST /conversations/:id/messages           | messages:write      |
-| POST /conversations/:id/resolve            | conversations:write |
-| POST /customers/identify                   | customers:identify  |
-| Pre-chat answers on GET /conversations/:id | intake:read         |
+| Operation                                                        | Scope               |
+| ---------------------------------------------------------------- | ------------------- |
+| GET /conversations                                               | conversations:read  |
+| GET /conversations/:id                                           | conversations:read  |
+| GET /conversations/:id/messages                                  | messages:read       |
+| POST /conversations                                              | conversations:write |
+| POST /conversations/:id/messages                                 | messages:write      |
+| POST /conversations/:id/resolve                                  | conversations:write |
+| POST /customers/identify                                         | customers:identify  |
+| Pre-chat answers and follow-up contact on GET /conversations/:id | intake:read         |
+| GET /availability                                                | availability:read   |
+
+Conversations include `priority`, `departmentId`, `topicId`, `overflowLevel`, and
+`followUpRequested`. With `intake:read`, `followUp` adds when the visitor asked to be contacted and the
+contact details they left.
+
+`GET /availability` reports whether a new chat would reach someone now: `open` (inside business
+hours, always true when no hours are saved), `availability` (`ONLINE` when open and at least one
+consultant is online), `onlineAgents`, `availableAgents` (online and below their chat limit), and the
+same counts per active department. Poll it no more than about once a minute per page view, or cache
+it server-side; the widget already receives live availability.
 
 All machine requests use `Authorization: Bearer bzc_...`; dashboard cookies are not accepted. Do not send business IDs: tenant context comes from the credential. Request bodies reject unknown properties. Message history excludes internal notes and deleted messages. This release returns public message content/metadata; attachment download remains a separate authorized widget/dashboard capability.
 
@@ -95,7 +106,24 @@ Proofs and their widget sessions last at most five minutes. Refresh through your
 
 ## Webhooks
 
-Add a public HTTPS endpoint in the dashboard and store the one-time signing secret at the receiving server. The first UI subscribes to all three events: `conversation.created`, `message.created`, `conversation.resolved`. The management HTTP API also accepts a subset. Internal notes are never enqueued. Events from widgets, agents, integrations, and system actions are inserted into a transactional outbox by database triggers, so rollbacks do not leak events and application crashes do not lose the queued delivery.
+Add a public HTTPS endpoint in the dashboard, choose its events (all are selected by default), and store the one-time signing secret at the receiving server.
+
+| Event                              | Sent when                                                         | `data`                                           |
+| ---------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
+| `conversation.created`             | a conversation is created                                         | `id`, `status`, `source`, `subject`, `createdAt` |
+| `message.created`                  | a public message is stored                                        | message fields; internal notes are never sent    |
+| `conversation.resolved`            | a conversation becomes resolved                                   | `id`, `status`, `resolvedAt`                     |
+| `conversation.queued`              | it waits for a consultant (also after a declined or missed offer) | routing fields                                   |
+| `conversation.offered`             | a consultant is asked to take it                                  | routing fields, `consultant`, `offerExpiresAt`   |
+| `conversation.assigned`            | a consultant has it                                               | routing fields, `consultant`, `assignedAt`       |
+| `conversation.overflowed`          | an overflow step widened who may take it                          | routing fields, `fromLevel`                      |
+| `conversation.follow_up_requested` | the visitor left contact details instead of waiting               | routing fields, `followUpRequestedAt`            |
+| `conversation.closed`              | it closed without resolution, e.g. the visitor left the queue     | `id`, `status`, `closedAt`                       |
+
+Routing fields are `id`, `status`, `priority`, `departmentId`, `topicId`, and `overflowLevel`;
+`consultant` is `{ membershipId, displayName }`. Follow-up contact details are never sent in a
+webhook; fetch the conversation with an `intake:read` key. Timestamps are ISO 8601 UTC ending in
+`Z` (before 2026-10-25 webhook timestamps omitted the `Z` but were already UTC). Internal notes are never enqueued. Events from widgets, agents, integrations, and system actions are inserted into a transactional outbox by database triggers, so rollbacks do not leak events and application crashes do not lose the queued delivery.
 
 Each body has `id`, `type`, `version`, `createdAt`, and `data`. `X-BizChat-Event-Id` is stable across retries/replays. `X-BizChat-Signature` is `t=<unix-seconds>,v1=<hex-HMAC-SHA256>` over the exact string `<timestamp>.<raw-body>`. Verify both the timestamp (for example ±5 minutes) and signature using a constant-time comparison before parsing or processing the body. Deduplicate using the event ID and acknowledge promptly with 2xx. Delivery is at least once and ordering is not guaranteed; use message sequence numbers where needed.
 

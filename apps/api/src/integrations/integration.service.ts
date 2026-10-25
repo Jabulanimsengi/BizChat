@@ -44,6 +44,11 @@ function publicConversation(row: Conversation): object {
     status: row.status,
     source: row.source,
     subject: row.subject,
+    priority: row.priority,
+    departmentId: row.departmentId,
+    topicId: row.topicId,
+    overflowLevel: row.overflowLevel,
+    followUpRequested: row.followUpRequestedAt !== null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
@@ -78,10 +83,21 @@ export class IntegrationService {
   }
 
   public async get(principal: IntegrationPrincipal, id: string): Promise<object> {
-    const conversation = publicConversation(await this.find(this.prisma, principal.businessId, id));
-    // Pre-chat answers are personal information and need the separate intake:read scope.
+    const row = await this.find(this.prisma, principal.businessId, id);
+    const conversation = publicConversation(row);
+    // Pre-chat answers and follow-up contact details are personal information and need the
+    // separate intake:read scope.
     return principal.scopes.includes('intake:read')
-      ? { ...conversation, intake: await this.forms.forConversation(id) }
+      ? {
+          ...conversation,
+          intake: await this.forms.forConversation(id),
+          followUp: row.followUpRequestedAt
+            ? {
+                requestedAt: row.followUpRequestedAt.toISOString(),
+                contact: row.followUpContact,
+              }
+            : null,
+        }
       : conversation;
   }
 

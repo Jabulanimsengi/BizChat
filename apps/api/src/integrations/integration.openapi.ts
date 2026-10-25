@@ -159,6 +159,38 @@ export const integrationOpenApi = {
         'Resolve',
       ),
     },
+    '/availability': {
+      get: operation(
+        'Whether a new chat would reach a consultant now, overall and per department',
+        'availability:read',
+        {
+          type: 'object',
+          required: ['open', 'availability', 'onlineAgents', 'availableAgents', 'departments'],
+          properties: {
+            open: {
+              type: 'boolean',
+              description: 'Inside business hours (always true without hours)',
+            },
+            availability: { type: 'string', enum: ['ONLINE', 'OFFLINE'] },
+            onlineAgents: { type: 'integer' },
+            availableAgents: { type: 'integer', description: 'Online and below their chat limit' },
+            departments: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  publicId: { type: 'string' },
+                  name: { type: 'string' },
+                  onlineAgents: { type: 'integer' },
+                  availableAgents: { type: 'integer' },
+                },
+              },
+            },
+            checkedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+      ),
+    },
     '/customers/identify': {
       post: operation(
         'Issue a five-minute customer identity proof',
@@ -207,6 +239,15 @@ export const integrationOpenApi = {
           },
           source: { type: 'string' },
           subject: { type: ['string', 'null'] },
+          priority: { type: 'string', enum: ['LOW', 'NORMAL', 'HIGH', 'URGENT'] },
+          departmentId: { type: ['string', 'null'], format: 'uuid' },
+          topicId: { type: ['string', 'null'], format: 'uuid' },
+          overflowLevel: { type: 'integer' },
+          followUpRequested: { type: 'boolean' },
+          followUp: {
+            type: ['object', 'null'],
+            description: 'With intake:read only: when and how the visitor asked to be contacted',
+          },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
           resolvedAt: { type: ['string', 'null'], format: 'date-time' },

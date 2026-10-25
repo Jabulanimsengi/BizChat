@@ -8,11 +8,19 @@ export const integrationScopes = [
   'customers:identify',
   // Pre-chat form answers are personal information, so reading them needs its own scope.
   'intake:read',
+  // Who is online and whether the business is open, e.g. to show a chat button only when staffed.
+  'availability:read',
 ] as const;
 export const webhookEvents = [
   'conversation.created',
   'message.created',
   'conversation.resolved',
+  'conversation.queued',
+  'conversation.offered',
+  'conversation.assigned',
+  'conversation.overflowed',
+  'conversation.follow_up_requested',
+  'conversation.closed',
 ] as const;
 export const keySchema = z
   .object({
@@ -20,7 +28,7 @@ export const keySchema = z
     scopes: z
       .array(z.enum(integrationScopes))
       .min(1)
-      .max(5)
+      .max(integrationScopes.length)
       .transform((items) => [...new Set(items)]),
     expiresInDays: z.number().int().min(1).max(365).default(90),
   })
@@ -72,7 +80,7 @@ export const webhookSchema = z
     events: z
       .array(z.enum(webhookEvents))
       .min(1)
-      .max(3)
+      .max(webhookEvents.length)
       .transform((items) => [...new Set(items)]),
   })
   .strict();

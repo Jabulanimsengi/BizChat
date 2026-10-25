@@ -1,3 +1,5 @@
+import type { IntegrationAvailabilityResponse } from '@bizchat/types';
+import { AvailabilityService } from './availability.service';
 import {
   Body,
   Controller,
@@ -126,6 +128,7 @@ export class IntegrationController {
   public constructor(
     private readonly service: IntegrationService,
     private readonly identities: CustomerIdentityService,
+    private readonly availabilityService: AvailabilityService,
   ) {}
   @Get('conversations')
   @IntegrationScopeRequired('conversations:read')
@@ -181,6 +184,13 @@ export class IntegrationController {
     @Body(new ZodValidationPipe(resolveSchema)) input: ResolveInput,
   ): Promise<unknown> {
     return this.service.resolve(request.integration, id, key, input);
+  }
+  @Get('availability')
+  @IntegrationScopeRequired('availability:read')
+  public availability(
+    @Req() request: IntegrationRequest,
+  ): Promise<IntegrationAvailabilityResponse> {
+    return this.availabilityService.forBusiness(request.integration.businessId);
   }
   @Post('customers/identify')
   @IntegrationScopeRequired('customers:identify')
