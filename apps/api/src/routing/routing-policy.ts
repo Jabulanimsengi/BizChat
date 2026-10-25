@@ -46,9 +46,12 @@ export function orderCandidates<T extends RoutingCandidate>(
   });
 }
 
-/** Who may take a conversation: a department (null = any) and a skill at a minimum proficiency. */
+/**
+ * Who may take a conversation: members of any of the departments (null = anyone, so an overflowed
+ * conversation may span several) with a skill at a minimum proficiency.
+ */
 export interface EligibilityScope {
-  departmentId: string | null;
+  departmentIds: string[] | null;
   skillId: string | null;
   minProficiency: number;
 }
@@ -56,7 +59,9 @@ export interface EligibilityScope {
 /** True when every consultant eligible for `narrower` is also eligible for `broader`. */
 function covers(broader: EligibilityScope, narrower: EligibilityScope): boolean {
   const department =
-    broader.departmentId === null || broader.departmentId === narrower.departmentId;
+    broader.departmentIds === null ||
+    (narrower.departmentIds !== null &&
+      narrower.departmentIds.every((id) => broader.departmentIds!.includes(id)));
   const skill =
     broader.skillId === null ||
     (broader.skillId === narrower.skillId && broader.minProficiency <= narrower.minProficiency);

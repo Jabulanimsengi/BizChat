@@ -59,6 +59,7 @@ import { ConversationTimelineService } from './conversation-timeline.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
 import { IntakeService } from '../intake/intake.service';
 import { IntakeFormService } from '../intake/intake-form.service';
+import { BusinessHoursService } from '../business-hours/business-hours.service';
 import { classificationRecord, TopicCatalogService } from '../intake/topic-catalog.service';
 
 const OPEN_VISITOR_STATUSES = [
@@ -116,6 +117,7 @@ export class ConversationService {
     private readonly topics: TopicCatalogService,
     private readonly intake: IntakeService,
     private readonly forms: IntakeFormService,
+    private readonly hours: BusinessHoursService,
   ) {}
 
   public async startVisitor(
@@ -134,11 +136,13 @@ export class ConversationService {
 
     // Decided before the transaction (it needs only the message and the cached topic catalogue) and
     // used only if this message starts a new conversation. An explicit department skips topics.
+    // Outside business hours nobody is waiting to answer, so an unclear message is not questioned:
+    // it takes the default topic and the visitor is offered a follow-up instead.
     const intake = input.departmentPublicId
       ? null
       : await this.topics.decide(identity.businessId, input.content, {
           ...(input.topicPublicId ? { topicPublicId: input.topicPublicId } : {}),
-          canAsk: true,
+          canAsk: await this.hours.isOpenNow(identity.businessId),
         });
     // Pre-chat form: answered with the first message (BEFORE_CHAT), or asked once the topic is known.
     const beforeChatForm = await this.forms.beforeChatForm(identity.businessId);

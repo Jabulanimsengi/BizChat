@@ -1,5 +1,10 @@
 import type { Attachment, Conversation, Message, MessageReceipt } from '@prisma/client';
-import type { AttachmentResponse, ConversationResponse, MessageResponse } from '@bizchat/types';
+import type {
+  AttachmentResponse,
+  ConversationResponse,
+  FollowUpContact,
+  MessageResponse,
+} from '@bizchat/types';
 
 export function serializeConversation(conversation: Conversation): ConversationResponse {
   return {
@@ -16,6 +21,10 @@ export function serializeConversation(conversation: Conversation): ConversationR
     departmentName: null,
     topicId: conversation.topicId,
     intakeStatus: conversation.intakeStatus,
+    overflowLevel: conversation.overflowLevel,
+    maxWaitReachedAt: conversation.maxWaitNotifiedAt?.toISOString() ?? null,
+    followUpRequestedAt: conversation.followUpRequestedAt?.toISOString() ?? null,
+    followUpContact: conversation.followUpContact as FollowUpContact | null,
     queuedAt: null,
     queuePosition: null,
     resolvedAt: conversation.resolvedAt?.toISOString() ?? null,

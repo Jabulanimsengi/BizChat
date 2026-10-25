@@ -12,6 +12,10 @@ describe('ConversationReliabilityService', () => {
   const idleIntake = (): { expirePrompts: jest.Mock } => ({
     expirePrompts: jest.fn().mockResolvedValue(0),
   });
+  const idleWaits = (): { advanceOverflow: jest.Mock; notifyLongWaits: jest.Mock } => ({
+    advanceOverflow: jest.fn().mockResolvedValue(0),
+    notifyLongWaits: jest.fn().mockResolvedValue(0),
+  });
   const idleRouting = (): Record<
     'routeConversation' | 'abandonDepartedVisitors' | 'drainBusinessQueue',
     jest.Mock
@@ -48,6 +52,7 @@ describe('ConversationReliabilityService', () => {
       config as never,
       offers as never,
       idleIntake() as never,
+      idleWaits() as never,
     );
 
     const ids = await service.agentDisconnected('business-1', 'profile-1', 'membership-1');
@@ -130,6 +135,7 @@ describe('ConversationReliabilityService', () => {
       config as never,
       idleOffers() as never,
       idleIntake() as never,
+      idleWaits() as never,
     );
 
     await service.runSweep();
@@ -160,6 +166,7 @@ describe('ConversationReliabilityService', () => {
       config as never,
       idleOffers() as never,
       idleIntake() as never,
+      idleWaits() as never,
     );
 
     await service.runSweep();
@@ -187,6 +194,7 @@ describe('ConversationReliabilityService', () => {
       config as never,
       idleOffers() as never,
       idleIntake() as never,
+      idleWaits() as never,
     );
 
     await service.runSweep();
@@ -221,6 +229,7 @@ describe('ConversationReliabilityService', () => {
       config as never,
       offers as never,
       intake as never,
+      idleWaits() as never,
     );
 
     await service.runSweep();

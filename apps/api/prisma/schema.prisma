@@ -143,6 +143,9 @@ enum ConversationEventType {
   INTERNAL_NOTE_ADDED
   OFFERED
   TOPIC_SET
+  OVERFLOWED
+  MAX_WAIT_REACHED
+  FOLLOW_UP_REQUESTED
 }
 
 enum ConversationEventActorType {
@@ -466,6 +469,10 @@ model Topic {
   sortOrder                   Int                          @default(0)
   // Pre-chat form asked after this topic is chosen (AFTER_TOPIC timing); null uses the default form.
   intakeFormId                String?                      @db.Uuid
+  // [{ afterSeconds, addDepartmentIds, relaxSkill, anyConsultant }], validated by the API.
+  overflowSteps               Json                         @default("[]")
+  // After this long in the queue the visitor is offered a follow-up instead of waiting.
+  maxWaitSeconds              Int?
   createdAt                   DateTime                     @default(now())
   updatedAt                   DateTime                     @updatedAt
   business                    Business                     @relation(fields: [businessId], references: [id], onDelete: Restrict)
@@ -717,6 +724,16 @@ model Conversation {
   // Set while status is OFFERED; assignedAgentMembershipId then holds the offered consultant.
   currentOfferId              String?                      @db.Uuid
   offerExpiresAt              DateTime?
+  // Overflow steps of the topic applied so far; the sweep advances the level at nextOverflowAt.
+  overflowLevel               Int                          @default(0)
+  nextOverflowAt              DateTime?
+  // Offers refused before this do not exclude a consultant (an overflow step starts a new cycle).
+  routingCycleStartedAt       DateTime?
+  maxWaitAt                   DateTime?
+  maxWaitNotifiedAt           DateTime?
+  // The visitor left contact details to be followed up instead of waiting.
+  followUpRequestedAt         DateTime?
+  followUpContact             Json?
   business                    Business                     @relation(fields: [businessId], references: [id], onDelete: Restrict)
   visitor                     Visitor?                     @relation(fields: [visitorId], references: [id], onDelete: Restrict)
   assignedAgent               BusinessMembership?          @relation("AssignedAgent", fields: [assignedAgentMembershipId], references: [id], onDelete: SetNull)
@@ -743,6 +760,8 @@ model Conversation {
   @@index([status, createdAt])
   @@index([status, offerExpiresAt])
   @@index([intakeStatus, intakeExpiresAt])
+  @@index([status, nextOverflowAt])
+  @@index([status, maxWaitAt])
   @@map("conversations")
 }
 

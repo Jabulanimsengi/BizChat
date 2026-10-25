@@ -354,3 +354,32 @@ identity claims, and the consultant answers endpoint. The end-to-end suite passe
 and the before-chat mode). The first run failed one HTTP assertion and the B3 harness because both
 still expected pre-B4 response shapes; both were updated and the re-run passed. The widget form and
 dashboard form editor were type-checked but not exercised in a browser.
+
+## Phase B5 - Overflow, maximum wait, follow-ups, and business hours — 2026-10-25
+
+- Topics take up to five overflow steps (after N seconds: add departments, drop the skill
+  requirement, or allow any online consultant; steps add up). The reliability sweep moves a waiting
+  chat to the level its wait has reached, records `OVERFLOWED`, starts a new routing cycle (earlier
+  declines no longer exclude a consultant), and drains the tenant.
+- Topics take an optional maximum wait. Widget visitors are then offered a follow-up once; they can
+  leave a name, email or phone, and a note. The chat stays queued, is flagged in the inbox with the
+  contact details, and is no longer closed when the visitor leaves.
+- Outside business hours nobody is offered or assigned a chat, an unclear first message is not
+  questioned, and the widget offers a follow-up whenever the team shows offline. Tenants without
+  saved hours are always open, so existing tenants are unchanged.
+- Fixed a starvation bug: a chat that stayed queued only because of its own exclusions used to mark
+  its whole department exhausted for the drain pass, holding back newer chats in that department.
+- Migrations `20261025100000_phase_b5_event_types` and `20261025100100_phase_b5_overflow` are
+  additive, with database checks on step count, maximum wait, and overflow level.
+
+Verification: format, lint, and type checks pass in every workspace; 223 API unit tests, 16
+dashboard, 6 widget, and 31 validation tests pass. Against the Docker test stack, all 20 migrations
+apply to an empty database and all 30 HTTP integration tests pass, including overflow settings,
+tenant checks on overflow departments, and the sweep advancing a queued chat on schedule. The
+end-to-end suite passes, including the new `phaseB5-smoke.mjs` (overflow after 10 s then assigned;
+wait options after 30 s with a validated, single follow-up; closed hours then opening) and the
+two-node `phase7`. The first runs failed for harness reasons, not product ones: the harness asserted
+the state before asynchronous routing finished, and assumed a new department starts empty (its
+creator is added). Windows had also reserved ports 4331-4430 after a restart, so the suite ran with
+`API_PORT=4600 SMOKE_API_B_PORT=4601`. The widget follow-up form and the dashboard overflow editor
+were type-checked and unit-tested but not exercised in a browser.

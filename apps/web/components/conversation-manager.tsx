@@ -45,6 +45,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { API_ORIGIN, apiRequest } from '../lib/api';
+import { FollowUpDetails, waitFlags } from './follow-up-details';
 import { IntakeAnswers } from './intake-answers';
 import { OfferTray } from './offer-tray';
 import { Button } from './ui/button';
@@ -873,6 +874,14 @@ export function ConversationManager() {
                       ? `Queued #${conversation.queuePosition}`
                       : formatStatus(conversation.status)}
                   </span>
+                  {waitFlags(conversation).map((flag) => (
+                    <span
+                      key={flag}
+                      className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-800"
+                    >
+                      {flag}
+                    </span>
+                  ))}
                   {conversation.unreadCount > 0 ? (
                     <span className="grid min-w-5 place-items-center rounded-full bg-moss px-1.5 py-0.5 text-[10px] font-bold text-white">
                       {conversation.unreadCount}
@@ -1169,6 +1178,7 @@ export function ConversationManager() {
                 }).format(new Date(selected.conversation.createdAt))}
               />
             </dl>
+            <FollowUpDetails conversation={selected.conversation} />
             <IntakeAnswers conversationId={selected.conversation.id} />
             <div className="mt-6 rounded-2xl border border-line bg-white p-4">
               <div className="flex items-center gap-2">

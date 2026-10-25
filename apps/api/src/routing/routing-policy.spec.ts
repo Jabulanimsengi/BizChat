@@ -71,10 +71,14 @@ describe('routing policy', () => {
   });
 
   const scope = (
-    departmentId: string | null,
+    departmentId: string | string[] | null,
     skillId: string | null = null,
     minProficiency = 1,
-  ): EligibilityScope => ({ departmentId, skillId, minProficiency });
+  ): EligibilityScope => ({
+    departmentIds: typeof departmentId === 'string' ? [departmentId] : departmentId,
+    skillId,
+    minProficiency,
+  });
 
   it('skips a department once it has no eligible consultant in the drain pass', () => {
     const scopes = new DrainScopeTracker();
@@ -110,6 +114,15 @@ describe('routing policy', () => {
     scopes.recordExhausted(scope(null, 'tax', 2));
     expect(scopes.shouldAttempt(scope('sales', 'tax', 2))).toBe(false);
     expect(scopes.shouldAttempt(scope('sales', 'tax', 1))).toBe(true);
+  });
+
+  it('treats an overflowed scope as exhausted only when every department in it is', () => {
+    const scopes = new DrainScopeTracker();
+    scopes.recordExhausted(scope('sales'));
+    expect(scopes.shouldAttempt(scope(['sales', 'support']))).toBe(true);
+    scopes.recordExhausted(scope(['sales', 'support']));
+    expect(scopes.shouldAttempt(scope('support'))).toBe(false);
+    expect(scopes.shouldAttempt(scope(['sales', 'support', 'general']))).toBe(true);
   });
 
   it('reports only the departments whose queue positions moved', () => {

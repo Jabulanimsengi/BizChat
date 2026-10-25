@@ -12,7 +12,13 @@ import type {
   MessageReceipt,
   Prisma,
 } from '@prisma/client';
-import type { ConversationResponse, ConversationRoutingEvent, IntakeAnswer } from '@bizchat/types';
+import type {
+  ConversationResponse,
+  ConversationRoutingEvent,
+  IntakeAnswer,
+  OverflowStep,
+} from '@bizchat/types';
+import { BusinessHoursService } from '../business-hours/business-hours.service';
 import type { Environment } from '../config/environment';
 import {
   CONVERSATION_CREATED_EVENT,
@@ -28,9 +34,11 @@ import { PrismaService } from '../database/prisma.service';
 import { PresenceService } from '../realtime/presence.service';
 import { RedisService } from '../realtime/redis.service';
 import { RELEASE_IF_HOLDER_SCRIPT } from '../realtime/redis-lock';
+import { nextOverflowAt, overflowScope, overflowSteps } from './overflow-policy';
 import {
   CAPACITY_STATUSES,
   DrainScopeTracker,
+  type EligibilityScope,
   orderCandidates,
   orderQueue,
   PRIORITY_WEIGHT,
@@ -59,22 +67,37 @@ interface SkillRequirement {
   minProficiency: number;
 }
 
+/** The departments and skill a conversation needs at its current overflow level. */
+function eligibilityOf(
+  conversation: Pick<
+    Conversation,
+    'departmentId' | 'overflowLevel' | 'requiredSkillId' | 'requiredSkillMinProficiency'
+  >,
+  steps: OverflowStep[],
+): EligibilityScope {
+  const overflow = overflowScope(conversation.departmentId, steps, conversation.overflowLevel);
+  return {
+    departmentIds: overflow.departmentIds,
+    skillId: overflow.relaxSkill ? null : conversation.requiredSkillId,
+    minProficiency: conversation.requiredSkillMinProficiency ?? 1,
+  };
+}
+
 /** Durable eligibility; presence and capacity are checked separately. */
 function eligibleProfileWhere(
-  conversation: Conversation,
+  businessId: string,
+  departmentIds: string[] | null,
   requirement: SkillRequirement | null,
   excludedProfileIds: string[] = [],
 ): Prisma.AgentProfileWhereInput {
   return {
     ...(excludedProfileIds.length ? { id: { notIn: excludedProfileIds } } : {}),
-    businessId: conversation.businessId,
+    businessId,
     status: 'ACTIVE',
     routingEnabled: true,
     membership: { status: 'ACTIVE' },
     user: { status: 'ACTIVE' },
-    ...(conversation.departmentId
-      ? { departments: { some: { departmentId: conversation.departmentId } } }
-      : {}),
+    ...(departmentIds ? { departments: { some: { departmentId: { in: departmentIds } } } } : {}),
     ...(requirement
       ? {
           skills: {
@@ -107,6 +130,8 @@ function departedVisitorWhere(cutoff: Date): Prisma.ConversationWhereInput {
           { status: 'OFFERED' },
         ],
       },
+      // A visitor who asked to be followed up intends to leave.
+      { followUpRequestedAt: null },
       {
         OR: [{ lastMessageAt: { lt: cutoff } }, { lastMessageAt: null, createdAt: { lt: cutoff } }],
       },
@@ -129,6 +154,7 @@ export class ConversationRoutingService {
     private readonly timeline: ConversationTimelineService,
     private readonly redis: RedisService,
     config: ConfigService<Environment, true>,
+    private readonly hours: BusinessHoursService,
   ) {
     this.abandonAfterSeconds = config.get('QUEUE_ABANDON_AFTER_SECONDS', { infer: true });
   }
@@ -160,6 +186,18 @@ export class ConversationRoutingService {
     conversationId: string,
     options: { assignmentType?: AssignmentType } = {},
   ): Promise<ConversationRoutingEvent> {
+    return (await this.route(businessId, conversationId, options)).event;
+  }
+
+  /**
+   * `constrained` is true when a queued outcome says nothing about other conversations in the same
+   * scope: consultants were excluded for this conversation only, or nobody was looked for.
+   */
+  private async route(
+    businessId: string,
+    conversationId: string,
+    options: { assignmentType?: AssignmentType; hoursChecked?: boolean },
+  ): Promise<{ event: ConversationRoutingEvent; constrained: boolean }> {
     const conversation = await this.prisma.conversation.findFirst({
       where: { id: conversationId, businessId },
     });
@@ -169,13 +207,16 @@ export class ConversationRoutingService {
       conversation.intakeStatus === 'AWAITING_TOPIC' ||
       conversation.intakeStatus === 'AWAITING_FORM'
     )
-      return this.result(conversation, 'QUEUED');
+      return { event: await this.result(conversation, 'QUEUED'), constrained: true };
     if (
       conversation.assignedAgentMembershipId ||
       !ROUTABLE_STATUSES.includes(conversation.status as (typeof ROUTABLE_STATUSES)[number])
     ) {
-      return this.result(conversation, outcomeOf(conversation));
+      return { event: await this.result(conversation, outcomeOf(conversation)), constrained: true };
     }
+    // Outside business hours nobody is offered or assigned a chat; it waits for opening time.
+    if (!options.hoursChecked && !(await this.hours.isOpenNow(businessId)))
+      return { event: await this.queue(conversation), constrained: true };
 
     const settings = await this.prisma.widgetSettings.findUnique({
       where: { businessId },
@@ -212,12 +253,15 @@ export class ConversationRoutingService {
         exclusionSeconds: true,
       },
     });
-    const requirement = await this.skillRequirement(conversation);
-    const excluded = await this.recentlyRefusedBy(
-      conversation.id,
-      routing?.exclusionSeconds ?? 300,
+    const scope = eligibilityOf(conversation, await this.topicSteps(conversation));
+    const requirement = scope.skillId ? await this.skillRequirement(conversation) : null;
+    const excluded = await this.recentlyRefusedBy(conversation, routing?.exclusionSeconds ?? 300);
+    const candidates = await this.eligibleCandidates(
+      conversation,
+      scope.departmentIds,
+      requirement,
+      excluded,
     );
-    const candidates = await this.eligibleCandidates(conversation, requirement, excluded);
     for (const candidate of orderCandidates(
       candidates,
       previous?.assignedAgentMembershipId ?? previousAssignment?.agentProfile.membershipId ?? null,
@@ -231,21 +275,38 @@ export class ConversationRoutingService {
         conversation,
         candidate,
         options.assignmentType ?? 'AUTO',
+        scope.departmentIds,
         requirement,
         offer,
       );
       if (!claimed) continue;
       if (claimed.timeline.message)
         this.publishTimelineMessage(claimed.timeline.message, claimed.conversation.visitorId);
-      if (!claimed.offerId) return this.publish(claimed.conversation, 'ASSIGNED');
+      if (!claimed.offerId)
+        return {
+          event: await this.publish(claimed.conversation, 'ASSIGNED'),
+          constrained: false,
+        };
       const routed = await this.publish(claimed.conversation, 'OFFERED');
       this.events.emit(
         CONVERSATION_OFFERED_EVENT,
         await this.offerEvent(claimed.conversation, routed.conversation),
       );
-      return routed;
+      return { event: routed, constrained: false };
     }
-    return this.queue(conversation);
+    return { event: await this.queue(conversation), constrained: excluded.length > 0 };
+  }
+
+  /** The topic's overflow steps, read only once the conversation has overflowed. */
+  private async topicSteps(
+    conversation: Pick<Conversation, 'topicId' | 'overflowLevel'>,
+  ): Promise<OverflowStep[]> {
+    if (!conversation.topicId || conversation.overflowLevel === 0) return [];
+    const topic = await this.prisma.topic.findUnique({
+      where: { id: conversation.topicId },
+      select: { overflowSteps: true },
+    });
+    return overflowSteps(topic?.overflowSteps);
   }
 
   /** The realtime payload for a pending offer, used when offering and when a consultant reconnects. */
@@ -420,6 +481,8 @@ export class ConversationRoutingService {
   }
 
   private async drainOnce(businessId: string): Promise<number> {
+    // Checked once per pass: nobody is offered or assigned a chat outside business hours.
+    if (!(await this.hours.isOpenNow(businessId))) return 0;
     const entries = await this.prisma.conversationQueueEntry.findMany({
       where: {
         businessId,
@@ -435,23 +498,34 @@ export class ConversationRoutingService {
       orderBy: [{ priority: 'desc' }, { enqueuedAt: 'asc' }, { id: 'asc' }],
       take: DRAIN_BATCH_SIZE,
       include: {
-        conversation: { select: { requiredSkillId: true, requiredSkillMinProficiency: true } },
+        conversation: {
+          select: {
+            departmentId: true,
+            overflowLevel: true,
+            requiredSkillId: true,
+            requiredSkillMinProficiency: true,
+            topic: { select: { overflowSteps: true } },
+          },
+        },
       },
     });
     const scopes = new DrainScopeTracker();
     let assigned = 0;
     for (const entry of orderQueue(entries)) {
-      const scope = {
-        departmentId: entry.departmentId,
-        skillId: entry.conversation.requiredSkillId,
-        minProficiency: entry.conversation.requiredSkillMinProficiency ?? 1,
-      };
+      const { topic, ...conversation } = entry.conversation;
+      const scope = eligibilityOf(
+        conversation,
+        conversation.overflowLevel > 0 ? overflowSteps(topic?.overflowSteps) : [],
+      );
       if (!scopes.shouldAttempt(scope)) continue;
-      const result = await this.routeConversation(businessId, entry.conversationId);
-      if (result.outcome !== 'QUEUED') {
+      const { event, constrained } = await this.route(businessId, entry.conversationId, {
+        hoursChecked: true,
+      });
+      if (event.outcome !== 'QUEUED') {
         assigned += 1;
         scopes.recordAssigned(entry.departmentId);
-      } else if (result.conversation.status === 'QUEUED') {
+      } else if (event.conversation.status === 'QUEUED' && !constrained) {
+        // A consultant excluded for this conversation may still suit the next one in the scope.
         scopes.recordExhausted(scope);
       }
     }
@@ -588,11 +662,17 @@ export class ConversationRoutingService {
 
   private async eligibleCandidates(
     conversation: Conversation,
+    departmentIds: string[] | null,
     requirement: SkillRequirement | null,
     excludedProfileIds: string[],
   ): Promise<(CandidateProfile & { activeChats: number; proficiency?: number })[]> {
     const profiles = await this.prisma.agentProfile.findMany({
-      where: eligibleProfileWhere(conversation, requirement, excludedProfileIds),
+      where: eligibleProfileWhere(
+        conversation.businessId,
+        departmentIds,
+        requirement,
+        excludedProfileIds,
+      ),
       include: {
         membership: { select: { status: true } },
         user: { select: { status: true } },
@@ -630,6 +710,7 @@ export class ConversationRoutingService {
     conversation: Conversation,
     candidate: CandidateProfile,
     assignmentType: AssignmentType,
+    departmentIds: string[] | null,
     requirement: SkillRequirement | null,
     offer: { expiresAt: Date } | null = null,
   ): Promise<{
@@ -644,7 +725,10 @@ export class ConversationRoutingService {
       const lockKey = `routing-capacity:${conversation.businessId}:${candidate.id}`;
       await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) IS NULL AS acquired`;
       const currentCandidate = await transaction.agentProfile.findFirst({
-        where: { ...eligibleProfileWhere(conversation, requirement), id: candidate.id },
+        where: {
+          ...eligibleProfileWhere(conversation.businessId, departmentIds, requirement),
+          id: candidate.id,
+        },
         include: { user: { select: { displayName: true } } },
       });
       if (
@@ -739,16 +823,21 @@ export class ConversationRoutingService {
     });
   }
 
-  /** Consultants who declined or missed this conversation recently are skipped. */
+  /**
+   * Consultants who declined or missed this conversation recently are skipped, within the current
+   * routing cycle: an overflow step starts a new cycle, so everyone is eligible again.
+   */
   private async recentlyRefusedBy(
-    conversationId: string,
+    conversation: Pick<Conversation, 'id' | 'routingCycleStartedAt'>,
     exclusionSeconds: number,
   ): Promise<string[]> {
+    const windowStart = new Date(Date.now() - exclusionSeconds * 1_000);
+    const cycleStart = conversation.routingCycleStartedAt;
     const refused = await this.prisma.conversationOffer.findMany({
       where: {
-        conversationId,
+        conversationId: conversation.id,
         outcome: { in: ['DECLINED', 'EXPIRED'] },
-        respondedAt: { gte: new Date(Date.now() - exclusionSeconds * 1_000) },
+        respondedAt: { gte: cycleStart && cycleStart > windowStart ? cycleStart : windowStart },
       },
       select: { agentProfileId: true },
       distinct: ['agentProfileId'],
@@ -771,7 +860,7 @@ export class ConversationRoutingService {
         where: { id: conversation.id },
       });
       if (current.assignedAgentMembershipId || current.status !== 'QUEUED') return current;
-      await transaction.conversationQueueEntry.upsert({
+      const entry = await transaction.conversationQueueEntry.upsert({
         where: { conversationId: conversation.id },
         update: {
           attempts: { increment: 1 },
@@ -788,6 +877,7 @@ export class ConversationRoutingService {
           lastAttemptAt: new Date(),
         },
       });
+      await this.scheduleWaitTimers(transaction, current, entry.enqueuedAt);
       if (changed.count === 1)
         await this.timeline.recordInTransaction(transaction, {
           businessId: conversation.businessId,
@@ -799,6 +889,39 @@ export class ConversationRoutingService {
       return current;
     });
     return this.publish(queued, outcomeOf(queued));
+  }
+
+  /**
+   * Sets when the next overflow step and the maximum wait fall due, measured from when the
+   * conversation joined the queue (a re-queued conversation keeps its original wait).
+   */
+  public async scheduleWaitTimers(
+    transaction: Prisma.TransactionClient,
+    conversation: Conversation,
+    enqueuedAt: Date,
+  ): Promise<void> {
+    const topic = conversation.topicId
+      ? await transaction.topic.findUnique({
+          where: { id: conversation.topicId },
+          select: { overflowSteps: true, maxWaitSeconds: true },
+        })
+      : null;
+    const steps = overflowSteps(topic?.overflowSteps);
+    // Only a widget visitor can be offered a follow-up while waiting.
+    const maxWaitAt =
+      topic?.maxWaitSeconds &&
+      conversation.source === 'WEB_WIDGET' &&
+      !conversation.maxWaitNotifiedAt &&
+      !conversation.followUpRequestedAt
+        ? new Date(enqueuedAt.getTime() + topic.maxWaitSeconds * 1_000)
+        : null;
+    await transaction.conversation.update({
+      where: { id: conversation.id },
+      data: {
+        nextOverflowAt: nextOverflowAt(steps, conversation.overflowLevel, enqueuedAt),
+        maxWaitAt,
+      },
+    });
   }
 
   private async capacity(
@@ -840,7 +963,7 @@ export class ConversationRoutingService {
     };
   }
 
-  private async conversationResponse(
+  public async conversationResponse(
     conversation: Conversation,
     queuedAt: Date | null,
     queuePosition: number | null,

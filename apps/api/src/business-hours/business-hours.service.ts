@@ -78,6 +78,15 @@ export class BusinessHoursService {
     return this.get(auth.business.id, auth.business.timezone);
   }
 
+  /** Whether the tenant is open now in its own timezone; a tenant without hours is always open. */
+  public async isOpenNow(businessId: string): Promise<boolean> {
+    const business = await this.prisma.business.findUnique({
+      where: { id: businessId },
+      select: { timezone: true },
+    });
+    return business ? this.isBusinessOpen(businessId, business.timezone) : false;
+  }
+
   public async isBusinessOpen(businessId: string, timezone: string): Promise<boolean> {
     const hours = await this.prisma.businessHour.findMany({ where: { businessId } });
     return hours.length === 0 || this.isOpen(hours, timezone);

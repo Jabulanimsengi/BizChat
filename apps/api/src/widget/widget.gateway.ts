@@ -16,7 +16,9 @@ import type {
   BusinessAvailabilityEvent,
   ConversationOperationEvent,
   ConversationRecoveryEvent,
+  ConversationResponse,
   ConversationRoutingEvent,
+  ConversationWaitOptionsEvent,
   IntakePrompt,
   IntakeSubmitResult,
   ConversationSessionResponse,
@@ -30,6 +32,7 @@ import {
   conversationHistorySchema,
   conversationResumeSchema,
   conversationStartSchema,
+  followUpRequestSchema,
   intakeFormSubmitSchema,
   intakeSubmitSchema,
   messageReadSchema,
@@ -60,8 +63,11 @@ import {
 } from '../realtime/realtime-events';
 import {
   CONVERSATION_ROUTED_EVENT,
+  CONVERSATION_WAIT_OPTIONS_EVENT,
   type ConversationRoutedApplicationEvent,
+  type ConversationWaitOptionsApplicationEvent,
 } from '../routing/routing-events';
+import { QueueWaitService } from '../routing/queue-wait.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
 import { IntakeService } from '../intake/intake.service';
 import {
@@ -90,6 +96,7 @@ interface WidgetServerEvents {
   'conversation.updated': (event: ConversationOperationEvent) => void;
   'conversation.recovery': (event: ConversationRecoveryEvent) => void;
   'conversation.intake.required': (event: { conversationId: string; prompt: IntakePrompt }) => void;
+  'conversation.wait.options': (event: ConversationWaitOptionsEvent) => void;
 }
 
 interface WidgetClientEvents {
@@ -106,6 +113,10 @@ interface WidgetClientEvents {
     ack: SocketAcknowledger<IntakeSubmitResult>,
   ) => void;
   'conversation.intake.form': (input: unknown, ack: SocketAcknowledger<IntakeSubmitResult>) => void;
+  'conversation.followup.request': (
+    input: unknown,
+    ack: SocketAcknowledger<ConversationResponse>,
+  ) => void;
   'conversation.history': (input: unknown, ack: SocketAcknowledger<MessagePage>) => void;
   'message.send': (input: unknown, ack: SocketAcknowledger<MessageResponse>) => void;
   'message.delivered': (input: unknown, ack: SocketAcknowledger<MessageReceiptEvent>) => void;
@@ -146,6 +157,7 @@ export class WidgetGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly events: EventEmitter2,
     private readonly routing: ConversationRoutingService,
     private readonly intake: IntakeService,
+    private readonly waits: QueueWaitService,
   ) {}
 
   public async handleConnection(client: WidgetSocket): Promise<void> {
@@ -282,6 +294,35 @@ export class WidgetGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error) {
       acknowledge(this.failure(error));
     }
+  }
+
+  /** The visitor leaves contact details instead of waiting (after a long wait or outside hours). */
+  @SubscribeMessage('conversation.followup.request')
+  public async requestFollowUp(
+    @ConnectedSocket() client: WidgetSocket,
+    @MessageBody() input: unknown,
+    @Ack() acknowledge: SocketAcknowledger<ConversationResponse>,
+  ): Promise<void> {
+    const parsed = followUpRequestSchema.safeParse(input);
+    if (!parsed.success) {
+      acknowledge(validationFailure(parsed.error.flatten()));
+      return;
+    }
+    try {
+      acknowledge({ ok: true, data: await this.waits.requestFollowUp(client.data, parsed.data) });
+    } catch (error) {
+      acknowledge(this.failure(error));
+    }
+  }
+
+  @OnEvent(CONVERSATION_WAIT_OPTIONS_EVENT)
+  public waitOptions(event: ConversationWaitOptionsApplicationEvent): void {
+    this.server
+      .to(this.conversationRoom(event.businessId, event.conversationId))
+      .emit('conversation.wait.options', {
+        conversationId: event.conversationId,
+        reason: event.reason,
+      });
   }
 
   @OnEvent(INTAKE_REQUIRED_EVENT)

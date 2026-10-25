@@ -396,6 +396,30 @@ const topicFields = {
   isDefault: z.boolean(),
   sortOrder: z.number().int().min(0).max(1000),
   intakeFormId: z.string().uuid().nullable(),
+  overflowSteps: z
+    .array(
+      z
+        .object({
+          afterSeconds: z.number().int().min(10).max(86_400),
+          addDepartmentIds: z.array(z.string().uuid()).max(10).default([]),
+          relaxSkill: z.boolean().default(false),
+          anyConsultant: z.boolean().default(false),
+        })
+        .strict()
+        .refine(
+          (step) => step.addDepartmentIds.length > 0 || step.relaxSkill || step.anyConsultant,
+          'Each overflow step must widen who can take the chat',
+        ),
+    )
+    .max(5)
+    .refine(
+      (steps) =>
+        steps.every(
+          (step, index) => index === 0 || step.afterSeconds > steps[index - 1]!.afterSeconds,
+        ),
+      'Overflow steps must be in increasing wait order',
+    ),
+  maxWaitSeconds: z.number().int().min(30).max(86_400).nullable(),
 };
 
 export const createTopicSchema = z
@@ -413,6 +437,8 @@ export const createTopicSchema = z
     isDefault: topicFields.isDefault.default(false),
     sortOrder: topicFields.sortOrder.default(0),
     intakeFormId: topicFields.intakeFormId.optional(),
+    overflowSteps: topicFields.overflowSteps.default([]),
+    maxWaitSeconds: topicFields.maxWaitSeconds.optional(),
   })
   .strict();
 
@@ -431,10 +457,27 @@ export const updateTopicSchema = z
     isDefault: topicFields.isDefault.optional(),
     sortOrder: topicFields.sortOrder.optional(),
     intakeFormId: topicFields.intakeFormId.optional(),
+    overflowSteps: topicFields.overflowSteps.optional(),
+    maxWaitSeconds: topicFields.maxWaitSeconds.optional(),
     status: z.enum(['ACTIVE', 'DISABLED']).optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+
+/** Contact details a waiting visitor leaves so the business can get back to them. */
+export const followUpRequestSchema = z
+  .object({
+    conversationId: z.string().uuid(),
+    name: z.string().trim().max(100).optional(),
+    email: emailSchema.optional(),
+    phone: z.string().trim().regex(PHONE, 'Enter a phone number').optional(),
+    note: z.string().trim().max(500).optional(),
+  })
+  .strict()
+  .refine((value) => Boolean(value.email || value.phone), {
+    message: 'Leave an email address or a phone number',
+    path: ['email'],
+  });
 
 export const topicTestSchema = z.object({ message: messageContentSchema }).strict();
 
@@ -732,5 +775,6 @@ export type ConversationSubscriptionInput = z.infer<typeof conversationSubscript
 export type TypingUpdateInput = z.infer<typeof typingUpdateSchema>;
 export type IntakeAnswersInput = z.infer<typeof intakeAnswersSchema>;
 export type IntakeFormSubmitInput = z.infer<typeof intakeFormSubmitSchema>;
+export type FollowUpRequestInput = z.infer<typeof followUpRequestSchema>;
 export type CreateIntakeFormInput = z.infer<typeof createIntakeFormSchema>;
 export type UpdateIntakeFormInput = z.infer<typeof updateIntakeFormSchema>;

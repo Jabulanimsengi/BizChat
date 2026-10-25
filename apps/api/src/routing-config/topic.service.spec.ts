@@ -33,6 +33,7 @@ describe('TopicService', () => {
     showAsQuickReply: true,
     isDefault: true,
     sortOrder: 0,
+    overflowSteps: [],
   };
 
   const setup = (): {

@@ -2,6 +2,7 @@ import type {
   ConversationOfferEvent,
   ConversationOfferWithdrawnEvent,
   ConversationRoutingEvent,
+  ConversationWaitOptionsEvent,
 } from '@bizchat/types';
 
 export const CONVERSATION_ROUTED_EVENT = 'conversation.routed';
@@ -34,4 +35,10 @@ export interface ConversationCapacityReleasedApplicationEvent {
   businessId: string;
   agentMembershipId: string | null;
   conversationId: string;
+}
+
+/** A waiting visitor passed the topic's maximum wait and may leave details for a follow-up. */
+export const CONVERSATION_WAIT_OPTIONS_EVENT = 'conversation.wait_options';
+export interface ConversationWaitOptionsApplicationEvent extends ConversationWaitOptionsEvent {
+  businessId: string;
 }

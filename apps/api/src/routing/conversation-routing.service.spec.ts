@@ -8,7 +8,13 @@ interface QueueEntryFixture {
   departmentId: string | null;
   priority: 'NORMAL' | 'URGENT';
   enqueuedAt: Date;
-  conversation: { requiredSkillId: string | null; requiredSkillMinProficiency: number | null };
+  conversation: {
+    departmentId: string | null;
+    overflowLevel: number;
+    requiredSkillId: string | null;
+    requiredSkillMinProficiency: number | null;
+    topic: null;
+  };
 }
 type RedisMock = Record<'set' | 'del' | 'eval' | 'exists', jest.Mock>;
 
@@ -29,10 +35,26 @@ describe('ConversationRoutingService', () => {
     priority,
     enqueuedAt: new Date(Date.UTC(2026, 9, 22, 8, minute)),
     conversation: {
+      departmentId,
+      overflowLevel: 0,
       requiredSkillId: skill?.id ?? null,
       requiredSkillMinProficiency: skill?.min ?? null,
+      topic: null,
     },
   });
+
+  /** Stubs the drain's per-conversation routing; the stub returns the routing event. */
+  const stubRoute = (
+    service: ConversationRoutingService,
+  ): jest.Mock<Promise<unknown>, [string, string]> => {
+    const route = jest.fn<Promise<unknown>, [string, string]>();
+    (service as unknown as { route: unknown }).route = (
+      businessId: string,
+      id: string,
+    ): Promise<unknown> =>
+      Promise.resolve(route(businessId, id)).then((event) => ({ event, constrained: false }));
+    return route;
+  };
 
   const conversationRow = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     id: 'conversation-1',
@@ -71,6 +93,7 @@ describe('ConversationRoutingService', () => {
       (overrides.timeline ?? {}) as never,
       redis as never,
       config as never,
+      { isOpenNow: jest.fn().mockResolvedValue(true) } as never,
     );
 
   it('drains the oldest highest-priority entries and skips departments with no capacity', async () => {
@@ -90,11 +113,9 @@ describe('ConversationRoutingService', () => {
       'normal-sales': { outcome: 'QUEUED', conversation: { status: 'QUEUED' } },
       'normal-support': { outcome: 'QUEUED', conversation: { status: 'QUEUED' } },
     };
-    const route = jest
-      .spyOn(service, 'routeConversation')
-      .mockImplementation((_businessId: string, id: string) =>
-        Promise.resolve(outcomes[id] as never),
-      );
+    const route = stubRoute(service).mockImplementation((_businessId: string, id: string) =>
+      Promise.resolve(outcomes[id] as never),
+    );
 
     await expect(service.drainBusinessQueue('business-1')).resolves.toBe(1);
 
@@ -127,13 +148,12 @@ describe('ConversationRoutingService', () => {
       conversation: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const service = createService(prisma, lockingRedis());
-    const route = jest
-      .spyOn(service, 'routeConversation')
-      .mockResolvedValueOnce({ outcome: 'QUEUED', conversation: { status: 'CLOSED' } } as never)
+    const route = stubRoute(service)
+      .mockResolvedValueOnce({ outcome: 'QUEUED', conversation: { status: 'CLOSED' } })
       .mockResolvedValueOnce({
         outcome: 'ASSIGNED',
         conversation: { status: 'ASSIGNED' },
-      } as never);
+      });
 
     await expect(service.drainBusinessQueue('business-1')).resolves.toBe(1);
     expect(route).toHaveBeenCalledTimes(2);
@@ -241,6 +261,7 @@ describe('ConversationRoutingService', () => {
               { status: 'OFFERED' },
             ],
           },
+          { followUpRequestedAt: null },
           expect.anything(),
         ],
         visitor: {
@@ -382,13 +403,12 @@ describe('ConversationRoutingService', () => {
       conversation: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const service = createService(prisma, lockingRedis());
-    const route = jest
-      .spyOn(service, 'routeConversation')
-      .mockResolvedValueOnce({ outcome: 'QUEUED', conversation: { status: 'QUEUED' } } as never)
+    const route = stubRoute(service)
+      .mockResolvedValueOnce({ outcome: 'QUEUED', conversation: { status: 'QUEUED' } })
       .mockResolvedValueOnce({
         outcome: 'ASSIGNED',
         conversation: { status: 'ASSIGNED' },
-      } as never);
+      });
 
     await service.drainBusinessQueue('business-1');
 
@@ -440,6 +460,7 @@ describe('ConversationRoutingService', () => {
         {} as never,
         lockingRedis() as never,
         config as never,
+        { isOpenNow: jest.fn().mockResolvedValue(true) } as never,
       );
       const internals = service as unknown as { tryClaim: jest.Mock; queue: jest.Mock };
       internals.tryClaim = jest.fn().mockResolvedValue(null);
@@ -468,6 +489,7 @@ describe('ConversationRoutingService', () => {
         expect.anything(),
         expect.objectContaining({ id: 'expert', proficiency: 5 }),
         'AUTO',
+        null,
         requirement,
         null,
       );
@@ -484,6 +506,7 @@ describe('ConversationRoutingService', () => {
         expect.anything(),
         expect.anything(),
         'AUTO',
+        null,
         null,
         null,
       );
@@ -564,6 +587,7 @@ describe('ConversationRoutingService', () => {
         {} as never,
         lockingRedis() as never,
         config as never,
+        { isOpenNow: jest.fn().mockResolvedValue(true) } as never,
       );
       const internals = service as unknown as {
         tryClaim: jest.Mock;
@@ -591,7 +615,7 @@ describe('ConversationRoutingService', () => {
           where: expect.objectContaining({ id: { notIn: ['decliner'] } }) as unknown,
         }),
       );
-      const offer = (internals.tryClaim.mock.calls[0] as unknown[])[4] as { expiresAt: Date };
+      const offer = (internals.tryClaim.mock.calls[0] as unknown[])[5] as { expiresAt: Date };
       expect(offer.expiresAt.getTime() - Date.now()).toBeGreaterThan(29_000);
       expect(internals.publish).toHaveBeenCalledWith(offeredRow, 'OFFERED');
       expect(emit).toHaveBeenCalledWith('conversation.offered', { offerId: 'offer-1' });
@@ -640,6 +664,7 @@ describe('ConversationRoutingService', () => {
         { ...offeredRow, status: 'QUEUED', assignedAgentMembershipId: null },
         { id: 'expert' },
         'AUTO',
+        ['sales'],
         null,
         { expiresAt },
       );
@@ -677,6 +702,148 @@ describe('ConversationRoutingService', () => {
       );
       const [, offeredEvent] = recordInTransaction.mock.calls[0] as [unknown, object];
       expect(offeredEvent).not.toHaveProperty('systemMessage');
+    });
+  });
+
+  describe('overflow, business hours, and routing cycles', () => {
+    const waitingRow = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+      ...conversationRow({ status: 'QUEUED', departmentId: 'sales' }),
+      intakeStatus: 'COMPLETE',
+      topicId: 'topic-1',
+      overflowLevel: 0,
+      routingCycleStartedAt: null,
+      requiredSkillId: 'skill-tax',
+      requiredSkillMinProficiency: 3,
+      ...overrides,
+    });
+    const setup = (
+      row: Record<string, unknown>,
+      open = true,
+    ): {
+      service: ConversationRoutingService;
+      findProfiles: jest.Mock;
+      findOffers: jest.Mock;
+      queue: jest.Mock;
+    } => {
+      const findProfiles = jest.fn().mockResolvedValue([]);
+      const findOffers = jest.fn().mockResolvedValue([]);
+      const prisma = {
+        conversation: {
+          findFirst: jest.fn().mockResolvedValue(row),
+          count: jest.fn().mockResolvedValue(0),
+        },
+        widgetSettings: { findUnique: jest.fn().mockResolvedValue(null) },
+        routingSettings: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ routingStrategy: 'LEAST_BUSY', exclusionSeconds: 300 }),
+        },
+        skill: { findFirst: jest.fn().mockResolvedValue({ id: 'skill-tax' }) },
+        topic: {
+          findUnique: jest.fn().mockResolvedValue({
+            overflowSteps: [
+              { afterSeconds: 60, addDepartmentIds: ['general'] },
+              { afterSeconds: 120, relaxSkill: true },
+            ],
+          }),
+        },
+        agentProfile: { findMany: findProfiles },
+        conversationOffer: { findMany: findOffers },
+      };
+      const service = new ConversationRoutingService(
+        prisma as never,
+        { getAgentState: jest.fn().mockResolvedValue('ONLINE') } as never,
+        { emit: jest.fn() } as never,
+        {} as never,
+        lockingRedis() as never,
+        config as never,
+        { isOpenNow: jest.fn().mockResolvedValue(open) } as never,
+      );
+      const internals = service as unknown as { queue: jest.Mock };
+      internals.queue = jest
+        .fn()
+        .mockResolvedValue({ outcome: 'QUEUED', conversation: { status: 'QUEUED' } });
+      return { service, findProfiles, findOffers, queue: internals.queue };
+    };
+    const profileWhere = (findProfiles: jest.Mock): Record<string, unknown> =>
+      (findProfiles.mock.calls[0] as [{ where: Record<string, unknown> }])[0].where;
+
+    it('adds overflow departments, then relaxes the skill, as levels apply', async () => {
+      const first = setup(waitingRow({ overflowLevel: 1 }));
+      await first.service.routeConversation('business-1', 'conversation-1');
+      expect(profileWhere(first.findProfiles)).toMatchObject({
+        departments: { some: { departmentId: { in: ['general', 'sales'] } } },
+        skills: { some: { skillId: 'skill-tax', proficiency: { gte: 3 } } },
+      });
+
+      const second = setup(waitingRow({ overflowLevel: 2 }));
+      await second.service.routeConversation('business-1', 'conversation-1');
+      expect(profileWhere(second.findProfiles)).toMatchObject({
+        departments: { some: { departmentId: { in: ['general', 'sales'] } } },
+      });
+      expect(profileWhere(second.findProfiles)).not.toHaveProperty('skills');
+    });
+
+    it('queues without looking for a consultant outside business hours', async () => {
+      const { service, findProfiles, queue } = setup(waitingRow(), false);
+      await service.routeConversation('business-1', 'conversation-1');
+      expect(findProfiles).not.toHaveBeenCalled();
+      expect(queue).toHaveBeenCalled();
+    });
+
+    it('counts refusals only from the current routing cycle', async () => {
+      const cycleStart = new Date(Date.now() - 10_000);
+      const { service, findOffers } = setup(waitingRow({ routingCycleStartedAt: cycleStart }));
+      await service.routeConversation('business-1', 'conversation-1');
+      expect(findOffers).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ respondedAt: { gte: cycleStart } }) as unknown,
+        }),
+      );
+    });
+
+    it('keeps draining a department after a conversation with exclusions stays queued', async () => {
+      const prisma = {
+        conversationQueueEntry: {
+          findMany: jest
+            .fn()
+            .mockResolvedValue([
+              queueEntry('declined', 'sales', 1),
+              queueEntry('next', 'sales', 2),
+            ]),
+        },
+        conversation: { findMany: jest.fn().mockResolvedValue([]) },
+      };
+      const service = createService(prisma, lockingRedis());
+      const route = jest
+        .fn()
+        .mockResolvedValueOnce({
+          event: { outcome: 'QUEUED', conversation: { status: 'QUEUED' } },
+          constrained: true,
+        })
+        .mockResolvedValueOnce({
+          event: { outcome: 'ASSIGNED', conversation: { status: 'ASSIGNED' } },
+          constrained: false,
+        });
+      (service as unknown as { route: jest.Mock }).route = route;
+
+      await expect(service.drainBusinessQueue('business-1')).resolves.toBe(1);
+      expect(route).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not drain a closed tenant', async () => {
+      const prisma = { conversationQueueEntry: { findMany: jest.fn() } };
+      const service = new ConversationRoutingService(
+        prisma as never,
+        {} as never,
+        { emit: jest.fn() } as never,
+        {} as never,
+        lockingRedis() as never,
+        config as never,
+        { isOpenNow: jest.fn().mockResolvedValue(false) } as never,
+      );
+      await expect(service.drainBusinessQueue('business-1')).resolves.toBe(0);
+      expect(prisma.conversationQueueEntry.findMany).not.toHaveBeenCalled();
     });
   });
 });

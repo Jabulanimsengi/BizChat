@@ -1,6 +1,6 @@
 # Phase B: intent routing, offers, overflow, and pre-chat intake
 
-Status: **B1-B4 implemented; B5 proposed**. This document defines the design for Phase B. It builds
+Status: **B1-B5 implemented**. This document defines the design for Phase B. It builds
 on the Phase A routing changes (ordered, coalesced queue drains; single-instance reliability sweep;
 queue abandonment).
 
@@ -19,8 +19,7 @@ B2 as built (section 5), with these differences from the design:
 
 - New businesses get `OFFER` from `NEW_TENANT_ASSIGNMENT_MODE` (default `OFFER`); the end-to-end
   runner sets it to `AUTO` because the Phase 3-9 harnesses exercise direct assignment.
-- Exclusions use `exclusionSeconds` only. Routing cycles (which clear exclusions) arrive with overflow
-  in B5.
+- Exclusions use `exclusionSeconds`; B5 added routing cycles, which clear them.
 - An offer declined, expired, or cancelled returns the conversation to `QUEUED` with a `QUEUED`
   timeline event whose metadata reason is `OFFER_DECLINED`, `OFFER_EXPIRED`, or `OFFER_CANCELLED`.
   `CONVERSATION_OFFER_PENDING` and `OFFER_NOT_ACCEPTED` block transfers and replies while offered.
@@ -264,6 +263,33 @@ require a small extension to the identity proof format.
 
 Guidance in the form editor: collect only what the consultant needs, and avoid national ID numbers
 unless the service requires them.
+
+B5 as built (section 4 and decision 4), with these differences from the design:
+
+- Overflow state lives on `conversations` (`overflowLevel`, `nextOverflowAt`, `routingCycleStartedAt`),
+  not on queue entries, because routing reads the conversation. Steps are measured from the queue
+  entry's `enqueuedAt`, so a chat re-queued after a declined offer keeps its wait. Each step may add
+  departments, drop the skill requirement, or allow any online consultant; steps apply cumulatively.
+  Topics hold up to five steps (10 s to 24 h, increasing).
+- The sweep moves a due conversation straight to the level its wait has reached (it may skip levels
+  the sweep missed), records one `OVERFLOWED` event, starts a new routing cycle, and drains the tenant.
+  Steps edited after a conversation queued apply from its next re-queue.
+- Drain scopes are sets of departments, so an overflowed conversation is skipped only when every
+  department it may use has nobody free. A conversation that stays queued because of its own
+  exclusions no longer marks its scope exhausted; before B5 one declined chat could hold back newer
+  chats in the same department until its exclusion lapsed.
+- Maximum wait (`maxWaitSeconds`, 30 s to 24 h) applies to widget chats only. The visitor gets
+  `conversation.wait.options` once (`MAX_WAIT_REACHED` event); a reloaded widget sees
+  `maxWaitReachedAt` on the conversation. A follow-up needs an email address or phone number, is
+  accepted once while the chat is unassigned and intake is complete, and records only which channels
+  were left in the `FOLLOW_UP_REQUESTED` event.
+- Outside business hours (decision 4), routing and drains offer and assign nobody; chats queue. An
+  unclear first message is not questioned (the default topic applies, as for the integration API).
+  The widget offers a follow-up whenever a chat is queued while the team shows offline, which covers
+  closed hours and nobody online. Pre-chat forms are still asked. A tenant without saved hours is
+  always open, so existing tenants are unchanged.
+- The inbox shows Follow-up and Overflow flags and the contact details; the topic editor has an
+  overflow step editor and the maximum wait. Webhooks for overflow remain Phase C.
 
 ## 3. Skills and matching
 

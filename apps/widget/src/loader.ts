@@ -1,8 +1,10 @@
 import type {
   BusinessAvailabilityEvent,
   ConversationOperationEvent,
+  ConversationResponse,
   ConversationRecoveryEvent,
   ConversationRoutingEvent,
+  ConversationWaitOptionsEvent,
   ConversationSessionResponse,
   IntakePrompt,
   IntakeSubmitResult,
@@ -52,6 +54,10 @@ class BizChatWidgetElement extends HTMLElement {
   private changingTopic = false;
   /** Default form answered with the first message (BEFORE_CHAT timing). */
   private beforeChatForm?: WidgetIntakeForm;
+  /** Whether any consultant is available; undefined until the server says. */
+  private teamOnline?: boolean;
+  /** The offer to leave contact details instead of waiting, and how far the visitor got with it. */
+  private followUp: { state: FollowUpState; reason: string } = { state: 'HIDDEN', reason: '' };
   private hasEarlier = false;
   private sending = false;
   private heartbeatTimer?: number;
@@ -84,7 +90,7 @@ class BizChatWidgetElement extends HTMLElement {
     style.nonce = this.getAttribute('style-nonce') ?? '';
     style.textContent = widgetStyles;
     const shell = document.createElement('div');
-    shell.innerHTML = `<section class="panel" role="dialog" aria-label="Business chat" hidden><header class="header"><div class="header-row"><div><p class="eyebrow">Customer care</p><h2 class="title">BizChat</h2></div><button class="close" type="button" aria-label="Close chat">&times;</button></div></header><div class="status-strip"><span class="status"><span class="dot connecting" data-connection-dot></span><span data-connection>connecting</span></span><span class="status"><span class="dot" data-team-dot></span><span data-team>Team status unknown</span></span></div><div class="body" data-scroll><div class="loading" data-loading>Preparing secure chat&hellip;</div><div class="error-box" data-error hidden></div><div data-chat hidden><div class="welcome"><h3 data-greeting></h3><p>Send a message and the team can reply here.</p><label class="department-picker" data-department-picker hidden><span>Choose a department</span><select data-department aria-label="Choose a department"></select></label></div><button class="load-earlier" type="button" data-load-earlier hidden>Load earlier messages</button><ol class="messages" data-messages aria-live="polite"></ol><div class="topic-picker" data-topic-picker role="group" hidden><p data-topic-prompt></p><div class="topic-options" data-topic-options></div></div><form class="intake-form" data-intake-form novalidate hidden></form><div class="typing" data-typing hidden><span></span><span></span><span></span><em>Consultant is typing</em></div></div></div><form class="composer" data-composer><div class="composer-row"><input data-attachment type="file" hidden accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,.txt,.csv"><button class="attach" type="button" disabled aria-label="Attach a file">&#128206;</button><textarea rows="2" disabled placeholder="Write a message" aria-label="Message composer" maxlength="4000"></textarea><button class="send" type="submit" disabled aria-label="Send message">${sendIcon}</button></div><p class="composer-note" data-composer-note>Your anonymous identity is stored only for this browser.</p></form></section><button class="launcher" type="button" aria-label="Open chat"><span data-launcher-content>${chatIcon}</span><span class="unread-badge" data-unread hidden>0</span></button>`;
+    shell.innerHTML = `<section class="panel" role="dialog" aria-label="Business chat" hidden><header class="header"><div class="header-row"><div><p class="eyebrow">Customer care</p><h2 class="title">BizChat</h2></div><button class="close" type="button" aria-label="Close chat">&times;</button></div></header><div class="status-strip"><span class="status"><span class="dot connecting" data-connection-dot></span><span data-connection>connecting</span></span><span class="status"><span class="dot" data-team-dot></span><span data-team>Team status unknown</span></span></div><div class="body" data-scroll><div class="loading" data-loading>Preparing secure chat&hellip;</div><div class="error-box" data-error hidden></div><div data-chat hidden><div class="welcome"><h3 data-greeting></h3><p>Send a message and the team can reply here.</p><label class="department-picker" data-department-picker hidden><span>Choose a department</span><select data-department aria-label="Choose a department"></select></label></div><button class="load-earlier" type="button" data-load-earlier hidden>Load earlier messages</button><ol class="messages" data-messages aria-live="polite"></ol><div class="topic-picker" data-topic-picker role="group" hidden><p data-topic-prompt></p><div class="topic-options" data-topic-options></div></div><form class="intake-form" data-intake-form novalidate hidden></form><form class="intake-form" data-follow-up novalidate hidden></form><div class="typing" data-typing hidden><span></span><span></span><span></span><em>Consultant is typing</em></div></div></div><form class="composer" data-composer><div class="composer-row"><input data-attachment type="file" hidden accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,.txt,.csv"><button class="attach" type="button" disabled aria-label="Attach a file">&#128206;</button><textarea rows="2" disabled placeholder="Write a message" aria-label="Message composer" maxlength="4000"></textarea><button class="send" type="submit" disabled aria-label="Send message">${sendIcon}</button></div><p class="composer-note" data-composer-note>Your anonymous identity is stored only for this browser.</p></form></section><button class="launcher" type="button" aria-label="Open chat"><span data-launcher-content>${chatIcon}</span><span class="unread-badge" data-unread hidden>0</span></button>`;
     shadow.append(style, shell);
     const panel = this.element<HTMLElement>('.panel');
     const launcher = this.element<HTMLButtonElement>('.launcher');
@@ -196,6 +202,8 @@ class BizChatWidgetElement extends HTMLElement {
     // The CDN-hosted widget may briefly run against an API that predates topics.
     this.topics = result.topics ?? [];
     this.beforeChatForm = result.form;
+    this.teamOnline =
+      result.availability === 'UNKNOWN' ? undefined : result.availability === 'ONLINE';
     // Topic buttons replace the department picker when the business has topics.
     picker.hidden =
       !result.config.departmentSelectionEnabled ||
@@ -259,6 +267,7 @@ class BizChatWidgetElement extends HTMLElement {
       }
     });
     this.socket.on('business.presence', (event: BusinessAvailabilityEvent) => {
+      this.teamOnline = event.availability === 'ONLINE';
       this.element('[data-team]').textContent =
         event.availability === 'ONLINE'
           ? `${event.onlineAgents} consultant${event.onlineAgents === 1 ? '' : 's'} online`
@@ -289,8 +298,13 @@ class BizChatWidgetElement extends HTMLElement {
         this.conversationId = undefined;
         this.intake = undefined;
         this.renderTopicPicker();
+        this.setFollowUp('HIDDEN');
         this.setComposerNote('Your place in the queue expired. Send a message to start again.');
       }
+    });
+    this.socket.on('conversation.wait.options', (event: ConversationWaitOptionsEvent) => {
+      if (event.conversationId !== this.conversationId) return;
+      this.offerFollowUp('Waiting times are longer than usual.');
     });
     this.socket.on(
       'conversation.intake.required',
@@ -512,8 +526,10 @@ class BizChatWidgetElement extends HTMLElement {
       : { answers, consent: consentBox?.checked ?? false };
   }
 
-  private showIntakeErrors(errors: Record<string, string>): void {
-    const container = this.element<HTMLFormElement>('[data-intake-form]');
+  private showIntakeErrors(
+    errors: Record<string, string>,
+    container = this.element<HTMLFormElement>('[data-intake-form]'),
+  ): void {
     for (const element of Array.from(container.querySelectorAll<HTMLElement>('[data-error-for]'))) {
       const message = errors[element.dataset.errorFor ?? ''];
       element.textContent = message ?? '';
@@ -558,6 +574,10 @@ class BizChatWidgetElement extends HTMLElement {
       // An unanswered topic prompt survives page reloads.
       this.intake = result.data.intake;
       this.renderTopicPicker();
+      const resumed = result.data.conversation;
+      if (resumed.followUpRequestedAt) this.setFollowUp('DONE');
+      else if (resumed.status === 'QUEUED' && resumed.maxWaitReachedAt)
+        this.offerFollowUp('Waiting times are longer than usual.');
       if (!recovering) {
         this.hasEarlier = result.data.history.hasMore;
         break;
@@ -632,6 +652,7 @@ class BizChatWidgetElement extends HTMLElement {
       this.updateEarlierButton();
       this.element<HTMLElement>('[data-department-picker]').hidden = true;
       this.selectedTopic = undefined;
+      this.followUp = { state: 'HIDDEN', reason: '' };
       this.intake = result.data.intake;
       this.renderTopicPicker();
       if (this.intake?.step === 'FORM')
@@ -690,11 +711,96 @@ class BizChatWidgetElement extends HTMLElement {
 
   private showRoutingState(event: ConversationRoutingEvent): void {
     if (event.outcome === 'QUEUED') {
-      const position = event.queuePosition ? ` You are number ${event.queuePosition}.` : '';
-      this.setComposerNote(`${this.queueMessage}${position}`);
-    } else if (event.outcome === 'OFFERED')
-      this.setComposerNote('Connecting you with a consultant…');
+      this.setComposerNote(`${this.queueMessage}${queuePositionText(event)}`);
+      // Outside business hours, or with nobody online, waiting may be pointless.
+      if (this.teamOnline === false && !event.conversation.followUpRequestedAt)
+        this.offerFollowUp('Nobody is available right now.');
+      return;
+    }
+    if (this.followUp.state !== 'DONE') this.setFollowUp('HIDDEN');
+    if (event.outcome === 'OFFERED') this.setComposerNote('Connecting you with a consultant…');
     else this.setComposerNote('A consultant has been assigned to your conversation.');
+  }
+
+  private offerFollowUp(reason: string): void {
+    if (this.followUp.state === 'HIDDEN') this.setFollowUp('OFFERED', reason);
+  }
+
+  private setFollowUp(state: FollowUpState, reason = this.followUp.reason): void {
+    this.followUp = { state, reason };
+    this.renderFollowUp();
+  }
+
+  /** Contact details instead of waiting. Built with DOM APIs, like the pre-chat form. */
+  private renderFollowUp(): void {
+    const container = this.element<HTMLFormElement>('[data-follow-up]');
+    const { state, reason } = this.followUp;
+    if (state === 'HIDDEN' || state === 'DONE' || !this.conversationId) {
+      container.hidden = true;
+      container.replaceChildren();
+      return;
+    }
+    const button = (label: string, submit: boolean, onClick?: () => void): HTMLButtonElement => {
+      const element = document.createElement('button');
+      element.type = submit ? 'submit' : 'button';
+      element.className = submit ? 'topic selected' : 'topic';
+      element.textContent = label;
+      if (onClick) element.addEventListener('click', onClick);
+      return element;
+    };
+    const heading = document.createElement('p');
+    heading.className = 'intake-title';
+    heading.textContent = `${reason} Leave your details and we'll get back to you.`;
+    const actions = document.createElement('div');
+    actions.className = 'topic-options';
+    const keepWaiting = button('Keep waiting', false, () => this.setFollowUp('HIDDEN'));
+    if (state === 'OFFERED') {
+      actions.append(
+        button('Leave my details', false, () => this.setFollowUp('FORM')),
+        keepWaiting,
+      );
+      container.replaceChildren(heading, actions);
+    } else {
+      actions.append(button('Send details', true), keepWaiting);
+      container.replaceChildren(
+        heading,
+        followUpField('name', 'Name', 'text', 100),
+        followUpField('email', 'Email', 'email', 254),
+        followUpField('phone', 'Phone', 'tel', 20),
+        followUpField('note', 'Anything we should know?', 'text', 500),
+        actions,
+      );
+    }
+    container.onsubmit = (event) => {
+      event.preventDefault();
+      void this.submitFollowUp();
+    };
+    container.hidden = false;
+  }
+
+  private async submitFollowUp(): Promise<void> {
+    if (!this.conversationId) return;
+    const container = this.element<HTMLFormElement>('[data-follow-up]');
+    const details: Record<string, string> = {};
+    for (const input of Array.from(container.querySelectorAll<HTMLInputElement>('input[name]'))) {
+      const value = input.value.trim();
+      if (value) details[input.name] = value;
+    }
+    if (!details.email && !details.phone) {
+      this.showIntakeErrors({ email: 'Leave an email address or a phone number' }, container);
+      return;
+    }
+    const result = await this.emit<ConversationResponse>('conversation.followup.request', {
+      conversationId: this.conversationId,
+      ...details,
+    });
+    if (!result.ok) {
+      this.showIntakeErrors(fieldErrors(result.error.details), container);
+      this.setComposerNote(result.error.message, true);
+      return;
+    }
+    this.setFollowUp('DONE');
+    this.setComposerNote("Thanks. We'll get back to you using the details you left.");
   }
 
   private async loadEarlier(): Promise<void> {
@@ -987,10 +1093,51 @@ export function formatBytes(value: number): string {
     ? `${Math.max(1, Math.ceil(value / 1024))} KB`
     : `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
-/** Per-field problems from an `INTAKE_INVALID` acknowledgement. */
+/**
+ * Per-field problems from an acknowledgement: `INTAKE_INVALID` gives one message per field, a
+ * validation error a list per field.
+ */
 function fieldErrors(details: unknown): Record<string, string> {
   const errors = (details as { fieldErrors?: unknown } | undefined)?.fieldErrors;
-  return errors && typeof errors === 'object' ? (errors as Record<string, string>) : {};
+  if (!errors || typeof errors !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(errors as Record<string, unknown>).map(([key, value]) => [
+      key,
+      Array.isArray(value) ? String(value[0] ?? '') : String(value),
+    ]),
+  );
+}
+
+type FollowUpState = 'HIDDEN' | 'OFFERED' | 'FORM' | 'DONE';
+
+/** The visitor's place in the queue; only indicative once the chat has overflowed. */
+export function queuePositionText(event: ConversationRoutingEvent): string {
+  if (!event.queuePosition) return '';
+  if (event.conversation.overflowLevel === 0) return ` You are number ${event.queuePosition}.`;
+  const ahead = event.queuePosition - 1;
+  return ahead === 0 ? " You're next." : ` About ${ahead} ahead of you.`;
+}
+
+function followUpField(
+  name: string,
+  label: string,
+  type: string,
+  maxLength: number,
+): HTMLLabelElement {
+  const wrapper = document.createElement('label');
+  wrapper.className = 'intake-field';
+  const caption = document.createElement('span');
+  caption.textContent = label;
+  const input = document.createElement('input');
+  input.name = name;
+  input.type = type;
+  input.maxLength = maxLength;
+  const error = document.createElement('em');
+  error.className = 'intake-error';
+  error.dataset.errorFor = name;
+  error.hidden = true;
+  wrapper.append(caption, input, error);
+  return wrapper;
 }
 
 function messageFrom(cause: unknown): string {

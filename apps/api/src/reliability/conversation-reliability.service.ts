@@ -17,6 +17,7 @@ import { ACQUIRE_OR_RENEW_LEASE_SCRIPT, RELEASE_IF_HOLDER_SCRIPT } from '../real
 import { ConversationOfferService } from '../routing/conversation-offer.service';
 import { IntakeService } from '../intake/intake.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
+import { QueueWaitService } from '../routing/queue-wait.service';
 import { ASSIGNED_STATUSES } from '../routing/routing-policy';
 import {
   CONVERSATION_RECOVERY_EVENT,
@@ -49,6 +50,7 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
     config: ConfigService<Environment, true>,
     private readonly offers: ConversationOfferService,
     private readonly intake: IntakeService,
+    private readonly waits: QueueWaitService,
   ) {
     this.sweepIntervalMs = config.get('RELIABILITY_SWEEP_INTERVAL_MS', { infer: true });
     this.retryBaseMs = config.get('RELIABILITY_RETRY_BASE_MS', { infer: true });
@@ -186,6 +188,8 @@ export class ConversationReliabilityService implements OnModuleInit, OnModuleDes
       for (const conversation of due) await this.processDueConversation(conversation);
       await this.offers.expireDue();
       await this.intake.expirePrompts();
+      await this.waits.advanceOverflow();
+      await this.waits.notifyLongWaits();
       await this.routing.abandonDepartedVisitors();
       const unrouted = await this.prisma.conversation.findMany({
         where: {

@@ -134,8 +134,31 @@ export interface TopicResponse {
   status: 'ACTIVE' | 'DISABLED';
   sortOrder: number;
   intakeFormId: string | null;
+  overflowSteps: OverflowStep[];
+  maxWaitSeconds: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A timed widening of who may take a queued conversation; steps apply cumulatively. */
+export interface OverflowStep {
+  afterSeconds: number;
+  addDepartmentIds: string[];
+  relaxSkill: boolean;
+  anyConsultant: boolean;
+}
+
+export interface FollowUpContact {
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  note: string | null;
+}
+
+/** Sent to a waiting visitor when the topic's maximum wait passes. */
+export interface ConversationWaitOptionsEvent {
+  conversationId: string;
+  reason: 'MAX_WAIT';
 }
 
 export interface TopicTestResponse {
@@ -357,6 +380,10 @@ export interface ConversationResponse {
   departmentName: string | null;
   topicId: string | null;
   intakeStatus: IntakeStatus;
+  overflowLevel: number;
+  maxWaitReachedAt: string | null;
+  followUpRequestedAt: string | null;
+  followUpContact: FollowUpContact | null;
   queuedAt: string | null;
   queuePosition: number | null;
   resolvedAt: string | null;
@@ -440,7 +467,10 @@ export type ConversationEventType =
   | 'TAGS_CHANGED'
   | 'INTERNAL_NOTE_ADDED'
   | 'OFFERED'
-  | 'TOPIC_SET';
+  | 'TOPIC_SET'
+  | 'OVERFLOWED'
+  | 'MAX_WAIT_REACHED'
+  | 'FOLLOW_UP_REQUESTED';
 
 export interface ConversationEventResponse {
   id: string;
@@ -455,7 +485,14 @@ export interface ConversationEventResponse {
 export interface ConversationOperationEvent {
   conversation: ConversationResponse;
   event: ConversationEventResponse;
-  operation: 'TRANSFERRED' | 'RESOLVED' | 'REOPENED' | 'TAGS_CHANGED' | 'ABANDONED';
+  operation:
+    | 'TRANSFERRED'
+    | 'RESOLVED'
+    | 'REOPENED'
+    | 'TAGS_CHANGED'
+    | 'ABANDONED'
+    | 'OVERFLOWED'
+    | 'FOLLOW_UP_REQUESTED';
   previousAssignedAgentMembershipId: string | null;
   assignedAgentMembershipId: string | null;
 }

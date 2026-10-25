@@ -7,6 +7,7 @@ import { AuditService } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 import { TopicCatalogService } from '../intake/topic-catalog.service';
+import { overflowSteps } from '../routing/overflow-policy';
 
 @Injectable()
 export class TopicService {
@@ -112,8 +113,22 @@ export class TopicService {
       departmentId?: string | null;
       requiredSkillId?: string | null;
       intakeFormId?: string | null;
+      overflowSteps?: { addDepartmentIds: string[] }[];
     },
   ): Promise<void> {
+    const overflowDepartments = [
+      ...new Set((input.overflowSteps ?? []).flatMap((step) => step.addDepartmentIds)),
+    ];
+    if (overflowDepartments.length) {
+      const found = await this.prisma.department.count({
+        where: { id: { in: overflowDepartments }, businessId, status: 'ACTIVE' },
+      });
+      if (found !== overflowDepartments.length)
+        throw new NotFoundException({
+          code: 'DEPARTMENT_NOT_FOUND',
+          message: 'An overflow step names a department that does not exist',
+        });
+    }
     if (input.intakeFormId) {
       const form = await this.prisma.intakeForm.count({
         where: { id: input.intakeFormId, businessId, status: 'ACTIVE' },
@@ -185,6 +200,8 @@ function serializeTopic(topic: Topic): TopicResponse {
     status: topic.status,
     sortOrder: topic.sortOrder,
     intakeFormId: topic.intakeFormId,
+    overflowSteps: overflowSteps(topic.overflowSteps),
+    maxWaitSeconds: topic.maxWaitSeconds,
     createdAt: topic.createdAt.toISOString(),
     updatedAt: topic.updatedAt.toISOString(),
   };

@@ -14,6 +14,12 @@ import { FlaskConical, LoaderCircle, Plus, Tags } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { ROUTING_CONFIG_CHANGED } from '../lib/routing-config-events';
+import {
+  overflowDrafts,
+  OverflowStepsEditor,
+  overflowStepsFrom,
+  type OverflowStepDraft,
+} from './overflow-steps-editor';
 import { Button } from './ui/button';
 
 interface TopicDraft {
@@ -31,6 +37,8 @@ interface TopicDraft {
   isDefault: boolean;
   sortOrder: string;
   intakeFormId: string;
+  overflowSteps: OverflowStepDraft[];
+  maxWaitSeconds: string;
 }
 
 const EMPTY_DRAFT: TopicDraft = {
@@ -47,6 +55,8 @@ const EMPTY_DRAFT: TopicDraft = {
   isDefault: false,
   sortOrder: '0',
   intakeFormId: '',
+  overflowSteps: [],
+  maxWaitSeconds: '',
 };
 
 const fieldClass =
@@ -139,6 +149,8 @@ export function TopicManager() {
       isDefault: draft.isDefault,
       sortOrder: Number(draft.sortOrder),
       intakeFormId: draft.intakeFormId || null,
+      overflowSteps: overflowStepsFrom(draft.overflowSteps),
+      maxWaitSeconds: draft.maxWaitSeconds ? Number(draft.maxWaitSeconds) : null,
     };
     return run(
       async () => {
@@ -423,6 +435,24 @@ export function TopicManager() {
               className={fieldClass}
             />
           </label>
+          <OverflowStepsEditor
+            steps={draft.overflowSteps}
+            departments={departments}
+            homeDepartmentId={draft.departmentId}
+            onChange={(overflowSteps) => setDraft({ ...draft, overflowSteps })}
+          />
+          <label className="text-xs font-medium text-slate-500">
+            Offer a follow-up after waiting (seconds, blank for never)
+            <input
+              type="number"
+              min={30}
+              max={86_400}
+              value={draft.maxWaitSeconds}
+              onChange={(event) => setDraft({ ...draft, maxWaitSeconds: event.target.value })}
+              placeholder="600"
+              className={fieldClass}
+            />
+          </label>
           <div className="flex flex-wrap items-center gap-5 md:col-span-2">
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -609,6 +639,8 @@ function draftFrom(topic: TopicResponse): TopicDraft {
     isDefault: topic.isDefault,
     sortOrder: String(topic.sortOrder),
     intakeFormId: topic.intakeFormId ?? '',
+    overflowSteps: overflowDrafts(topic.overflowSteps ?? []),
+    maxWaitSeconds: topic.maxWaitSeconds ? String(topic.maxWaitSeconds) : '',
   };
 }
 

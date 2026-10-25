@@ -44,6 +44,13 @@ departmentPublicId? }`. When the tenant has topics and no topic or department is
   `{ routed, intake }`, where `intake` is the form when the chosen topic needs one.
 - Server to client `conversation.intake.required`: `{ conversationId, prompt }` when the server starts
   an intake step itself (a topic prompt timed out into a topic with a form).
+- Server to client `conversation.wait.options`: `{ conversationId, reason: 'MAX_WAIT' }` once the topic's
+  maximum wait passes. Client to server `conversation.followup.request`:
+  `{ conversationId, name?, email?, phone?, note? }` (email or phone required) returns the
+  `ConversationResponse`; errors are `FOLLOW_UP_ALREADY_REQUESTED`, `FOLLOW_UP_UNAVAILABLE` (a
+  consultant has the chat), and `INTAKE_PENDING`. The chat stays queued and is no longer closed when
+  the visitor leaves. Conversations carry `overflowLevel`, `maxWaitReachedAt`, `followUpRequestedAt`,
+  and `followUpContact`.
 - Client to server `conversation.resume`: `{ conversationId, afterSequence?, limit? }`
 - Client to server `conversation.history`: `{ conversationId, beforeSequence, limit? }`
 - Client to server `message.send`: `{ conversationId, clientMessageId, content }`
@@ -56,7 +63,8 @@ departmentPublicId? }`. When the tenant has topics and no topic or department is
 - Server to client `business.presence`: aggregated `ONLINE`/`OFFLINE` consultant availability
 - Server to client `conversation.routed`: outcome `QUEUED` (with position), `OFFERED` (a consultant is
   being asked; no name is shown yet), or `ASSIGNED`
-- Server to client `conversation.updated`: transfer, resolve, reopen, tag, and `ABANDONED`
+- Server to client `conversation.updated`: transfer, resolve, reopen, tag, `OVERFLOWED`,
+  `FOLLOW_UP_REQUESTED`, and `ABANDONED`
   operations. `ABANDONED` means the visitor's place in the queue expired after they left; the widget
   forgets the conversation and the next message starts a new one.
 - Server to client `widget.error`: safe authentication/session error

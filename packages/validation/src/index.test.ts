@@ -10,6 +10,7 @@ import {
   createDepartmentSchema,
   createDomainSchema,
   createTagSchema,
+  followUpRequestSchema,
   internalNoteSchema,
   loginSchema,
   messageHistoryQuerySchema,
@@ -421,5 +422,48 @@ describe('pre-chat form validation', () => {
         ],
       }).success,
     ).toBe(false);
+  });
+
+  it('accepts overflow steps that widen eligibility in increasing wait order', () => {
+    const general = '0b6c6f7e-2b1a-4c8e-9f3a-6a7d8e9f0a1b';
+    const base = { name: 'Company registration' };
+    expect(
+      createTopicSchema.safeParse({
+        ...base,
+        overflowSteps: [
+          { afterSeconds: 60, addDepartmentIds: [general] },
+          { afterSeconds: 180, relaxSkill: true },
+        ],
+        maxWaitSeconds: 600,
+      }).success,
+    ).toBe(true);
+    // Out of order, a step that changes nothing, and a maximum wait below 30 seconds.
+    expect(
+      createTopicSchema.safeParse({
+        ...base,
+        overflowSteps: [
+          { afterSeconds: 180, relaxSkill: true },
+          { afterSeconds: 60, anyConsultant: true },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      createTopicSchema.safeParse({ ...base, overflowSteps: [{ afterSeconds: 60 }] }).success,
+    ).toBe(false);
+    expect(createTopicSchema.safeParse({ ...base, maxWaitSeconds: 5 }).success).toBe(false);
+  });
+
+  it('requires an email address or phone number for a follow-up', () => {
+    const conversationId = '0b6c6f7e-2b1a-4c8e-9f3a-6a7d8e9f0a1b';
+    expect(
+      followUpRequestSchema.safeParse({ conversationId, email: 'a@example.test' }).success,
+    ).toBe(true);
+    expect(
+      followUpRequestSchema.safeParse({ conversationId, phone: '+27 11 555 0100' }).success,
+    ).toBe(true);
+    expect(followUpRequestSchema.safeParse({ conversationId, name: 'Thandi' }).success).toBe(false);
+    expect(followUpRequestSchema.safeParse({ conversationId, phone: 'call me' }).success).toBe(
+      false,
+    );
   });
 });
