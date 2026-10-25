@@ -51,6 +51,7 @@ const singleNodePhases = [
   'phaseB3-smoke.mjs',
   'phaseB4-smoke.mjs',
   'phaseB5-smoke.mjs',
+  'phaseC-sdk-smoke.mjs',
 ];
 
 const redis = new Redis(environment.REDIS_URL);
@@ -107,6 +108,8 @@ async function startApi(port, logName) {
 async function main() {
   await run(npm, ['run', 'db:generate']);
   await run(npm, ['run', 'build', '-w', '@bizchat/api']);
+  // The SDK harness drives the API through the built client.
+  await run(npm, ['run', 'build', '-w', '@bizchat/sdk']);
   await run(npm, ['run', 'db:migrate:deploy']);
 
   const primary = await startApi(apiPort, 'e2e-api.log');

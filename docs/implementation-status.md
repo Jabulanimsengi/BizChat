@@ -472,3 +472,21 @@ audit attribution) and 20 dashboard tests pass; on a fresh Docker test stack all
 and all 38 HTTP tests pass, including a new setup suite (configuring a department, skill, topic,
 routing settings, and hours; key-attributed audit records; routing a consultant while rejecting role
 changes and owner edits; scope and tenant boundaries). The end-to-end suite passes.
+
+## Phase C3 - JavaScript SDK — 2026-10-25
+
+- New workspace package `@bizchat/sdk` (`docs/api/sdk.md`): a typed, dependency-free server-side
+  client for conversations, messages, customer identity proofs, availability, and every setup
+  endpoint. Writes that carry an idempotency key (generated per call unless supplied) are retried
+  with the same key on network errors, 429, 502-504, honouring `Retry-After`; other writes are not
+  retried. Errors are `BizChatError` with status, code, and request ID.
+- `verifyWebhook` and `parseWebhook` check the signature in constant time and the timestamp window.
+- The package is private to the repository; publishing it would need its types bundled.
+
+Verification: format, lint, and type checks pass in every workspace; 9 SDK unit tests pass,
+including a signature produced by the API's own signing function and retry behaviour with fake
+timers. A new end-to-end harness, `phaseC-sdk-smoke.mjs`, drives the built SDK against the API
+(setup with a duplicate rejected and an owner edit refused, availability, an idempotent create
+replayed, classification, send, history, resolve, an identity proof, and an invalid key), and the
+full end-to-end suite passes. Webhook delivery to a real receiver is not part of the harness, because
+endpoints must be public HTTPS hosts.
