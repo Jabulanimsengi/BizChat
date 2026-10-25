@@ -630,12 +630,15 @@ export class ConversationOperationsService {
     const current = await this.prisma.conversation.findUniqueOrThrow({
       where: { id: conversation.id },
     });
-    const [department, tags, queue] = await Promise.all([
+    const [department, topic, tags, queue] = await Promise.all([
       current.departmentId
         ? this.prisma.department.findUnique({
             where: { id: current.departmentId },
             select: { name: true },
           })
+        : null,
+      current.topicId
+        ? this.prisma.topic.findUnique({ where: { id: current.topicId }, select: { name: true } })
         : null,
       this.prisma.conversationTag.findMany({
         where: { businessId: current.businessId, conversationId: current.id },
@@ -649,6 +652,7 @@ export class ConversationOperationsService {
     return {
       ...serializeConversation(current),
       departmentName: department?.name ?? null,
+      topicName: topic?.name ?? null,
       queuedAt: queue?.enqueuedAt.toISOString() ?? null,
       queuePosition: null,
       tags: tags.map(({ tag }) => ({

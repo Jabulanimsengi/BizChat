@@ -47,6 +47,7 @@ import { io, type Socket } from 'socket.io-client';
 import { API_ORIGIN, apiRequest } from '../lib/api';
 import { FollowUpDetails, waitFlags } from './follow-up-details';
 import { IntakeAnswers } from './intake-answers';
+import { playOfferChime } from '../lib/offer-alert';
 import { OfferTray } from './offer-tray';
 import { Button } from './ui/button';
 
@@ -87,6 +88,8 @@ export function ConversationManager() {
   const [notice, setNotice] = useState<string>();
   const socketRef = useRef<Socket | undefined>(undefined);
   const selectedRef = useRef<string | undefined>(undefined);
+  // Offers are re-sent when the socket reconnects; chime only for ones not seen before.
+  const chimedOffers = useRef(new Set<string>());
   const profileIdRef = useRef<string | undefined>(undefined);
   const threadsRef = useRef<Record<string, ThreadState>>({});
   const scrollArea = useRef<HTMLDivElement>(null);
@@ -227,12 +230,16 @@ export function ConversationManager() {
       if (event.agentProfileId === profileIdRef.current) setPresence(event.state);
     });
     socket.on('agent.notice', (event: AgentNoticeEvent) => setNotice(event.message));
-    socket.on('conversation.offered', (offer: ConversationOfferEvent) =>
+    socket.on('conversation.offered', (offer: ConversationOfferEvent) => {
+      if (!chimedOffers.current.has(offer.offerId)) {
+        chimedOffers.current.add(offer.offerId);
+        playOfferChime();
+      }
       setOffers((current) => [
         ...current.filter(({ offerId }) => offerId !== offer.offerId),
         offer,
-      ]),
-    );
+      ]);
+    });
     socket.on('conversation.offer.withdrawn', (event: ConversationOfferWithdrawnEvent) =>
       setOffers((current) => current.filter(({ offerId }) => offerId !== event.offerId)),
     );
@@ -863,9 +870,11 @@ export function ConversationManager() {
                     ? 'Visitor is typing…'
                     : (conversation.lastMessagePreview ?? 'Conversation started')}
                 </p>
-                {conversation.departmentName ? (
+                {conversation.departmentName || conversation.topicName ? (
                   <p className="mt-1 truncate text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                    {conversation.departmentName}
+                    {[conversation.departmentName, conversation.topicName]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </p>
                 ) : null}
                 <div className="mt-2 flex items-center justify-between">
@@ -1160,6 +1169,7 @@ export function ConversationManager() {
                 label="Department"
                 value={selected.conversation.departmentName ?? 'General'}
               />
+              <Context label="Topic" value={selected.conversation.topicName ?? 'Not set'} />
               <Context
                 label="Routing"
                 value={

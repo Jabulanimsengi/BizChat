@@ -221,7 +221,9 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const event = await this.profiles.presenceEvent(profile, state);
       const previousState = client.data.lastPresenceState;
       client.data.lastPresenceState = event.state;
-      this.publishPresence(client.data.auth.business.id, event);
+      // A steady heartbeat changes nothing others can see; broadcasting it would make every widget
+      // recompute tenant availability every few seconds per consultant.
+      if (event.state !== previousState) this.publishPresence(client.data.auth.business.id, event);
       // Steady heartbeats never drain; capacity releases and presence changes trigger drains, and
       // the reliability sweep is the backstop. A heartbeat only drains when it restores availability.
       if (event.state === 'ONLINE' && previousState !== 'ONLINE')

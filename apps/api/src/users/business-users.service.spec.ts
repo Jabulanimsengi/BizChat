@@ -51,7 +51,11 @@ describe('BusinessUsersService skills', () => {
       ),
     };
     return {
-      service: new BusinessUsersService(prisma as never, { record: jest.fn() } as never),
+      service: new BusinessUsersService(
+        prisma as never,
+        { record: jest.fn() } as never,
+        { emit: jest.fn() } as never,
+      ),
       transaction,
     };
   };

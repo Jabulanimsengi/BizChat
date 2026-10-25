@@ -20,6 +20,7 @@ export function serializeConversation(conversation: Conversation): ConversationR
     departmentId: conversation.departmentId,
     departmentName: null,
     topicId: conversation.topicId,
+    topicName: null,
     intakeStatus: conversation.intakeStatus,
     overflowLevel: conversation.overflowLevel,
     maxWaitReachedAt: conversation.maxWaitNotifiedAt?.toISOString() ?? null,

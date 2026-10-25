@@ -1,3 +1,8 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+  CONVERSATION_CAPACITY_RELEASED_EVENT,
+  type ConversationCapacityReleasedApplicationEvent,
+} from '../routing/routing-events';
 import {
   ConflictException,
   ForbiddenException,
@@ -22,6 +27,7 @@ export class BusinessUsersService {
   public constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly events: EventEmitter2,
   ) {}
 
   public async list(businessId: string): Promise<BusinessUserResponse[]> {
@@ -195,6 +201,19 @@ export class BusinessUsersService {
         },
       });
     });
+    // Who may take queued chats changed, so drain now instead of waiting for the sweep.
+    if (
+      input.departmentIds ||
+      input.skills ||
+      input.routingEnabled !== undefined ||
+      input.maxConcurrentChats !== undefined ||
+      input.status !== undefined
+    )
+      this.events.emit(CONVERSATION_CAPACITY_RELEASED_EVENT, {
+        businessId: auth.business.id,
+        agentMembershipId: existing.id,
+        conversationId: 'routing-eligibility-change',
+      } satisfies ConversationCapacityReleasedApplicationEvent);
     await this.audit.record({
       businessId: auth.business.id,
       actorUserId: auth.user.id,

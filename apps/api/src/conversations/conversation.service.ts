@@ -683,6 +683,7 @@ export class ConversationService {
           take: 1,
         },
         department: { select: { name: true } },
+        topic: { select: { name: true } },
         queueEntry: true,
         tags: { include: { tag: true }, orderBy: { createdAt: 'asc' } },
       },
@@ -712,6 +713,7 @@ export class ConversationService {
         return {
           ...serializeConversation(conversation),
           departmentName: conversation.department?.name ?? null,
+          topicName: conversation.topic?.name ?? null,
           queuedAt:
             conversation.status === 'QUEUED'
               ? (conversation.queueEntry?.enqueuedAt.toISOString() ?? null)
@@ -1069,10 +1071,16 @@ export class ConversationService {
   }
 
   private async conversationResponse(conversation: Conversation): Promise<ConversationResponse> {
-    const [department, queueEntry, tags] = await Promise.all([
+    const [department, topic, queueEntry, tags] = await Promise.all([
       conversation.departmentId
         ? this.prisma.department.findUnique({
             where: { id: conversation.departmentId },
+            select: { name: true },
+          })
+        : null,
+      conversation.topicId
+        ? this.prisma.topic.findUnique({
+            where: { id: conversation.topicId },
             select: { name: true },
           })
         : null,
@@ -1090,6 +1098,7 @@ export class ConversationService {
     return {
       ...serializeConversation(conversation),
       departmentName: department?.name ?? null,
+      topicName: topic?.name ?? null,
       queuedAt: queueEntry?.enqueuedAt.toISOString() ?? null,
       queuePosition: queueEntry ? await this.queuePosition(queueEntry) : null,
       tags: tags.map(({ tag }) => ({

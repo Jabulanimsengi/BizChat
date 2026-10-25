@@ -379,6 +379,7 @@ export interface ConversationResponse {
   departmentId: string | null;
   departmentName: string | null;
   topicId: string | null;
+  topicName: string | null;
   intakeStatus: IntakeStatus;
   overflowLevel: number;
   maxWaitReachedAt: string | null;

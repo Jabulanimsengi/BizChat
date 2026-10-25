@@ -383,3 +383,25 @@ the state before asynchronous routing finished, and assumed a new department sta
 creator is added). Windows had also reserved ports 4331-4430 after a restart, so the suite ran with
 `API_PORT=4600 SMOKE_API_B_PORT=4601`. The widget follow-up form and the dashboard overflow editor
 were type-checked and unit-tested but not exercised in a browser.
+
+## Gap fixes after the Phase B browser check — 2026-10-25
+
+- Conversations carry `topicName`; the inbox list, context panel, and offer cards show the topic.
+- New offers play a short synthesised chime (once per offer, not again on reconnect) with a
+  per-browser Sound on/off toggle on the offer tray. Browsers that block audio until a user gesture
+  still show the card.
+- Changing a consultant's departments, skills, capacity, routing switch, or status from
+  **Dashboard → Users** drains the queue immediately instead of waiting for the sweep (changing your
+  own departments already did).
+- Consultant heartbeats broadcast presence only when it changes, and widgets receive
+  `business.presence` only when tenant availability actually changes (deduplicated through Redis
+  across instances). Previously every heartbeat made every widget recompute availability.
+- The integration identity HTTP test now clears the shared `localhost` domain first, so the suite
+  can run twice against the same database.
+
+Verification: format, lint, and type checks pass in every workspace; 224 API unit tests and 16
+dashboard tests pass; on a freshly reset Docker test stack all 20 migrations apply and all 30 HTTP
+integration tests pass; the end-to-end suite passes, including the two-node `phase7`. A rerun of the
+HTTP suite against the same database first failed in two integration tests because of data left by
+earlier runs (the shared domain, and old pending webhook deliveries ahead of the test's own); the
+first is fixed, the second still assumes a fresh stack. The chime was not heard in a browser yet.

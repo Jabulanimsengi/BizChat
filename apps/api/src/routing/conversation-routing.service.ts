@@ -974,6 +974,12 @@ export class ConversationRoutingService {
           select: { name: true },
         })
       : null;
+    const topic = conversation.topicId
+      ? await this.prisma.topic.findUnique({
+          where: { id: conversation.topicId },
+          select: { name: true },
+        })
+      : null;
     const conversationTags = await this.prisma.conversationTag.findMany({
       where: { conversationId: conversation.id },
       include: { tag: true },
@@ -982,6 +988,7 @@ export class ConversationRoutingService {
     return {
       ...serializeConversation(conversation),
       departmentName: department?.name ?? null,
+      topicName: topic?.name ?? null,
       queuedAt: queuedAt?.toISOString() ?? null,
       queuePosition,
       tags: conversationTags.map(({ tag }) => ({

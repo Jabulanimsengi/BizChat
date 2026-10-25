@@ -1,8 +1,9 @@
 'use client';
 
 import type { ConversationOfferEvent } from '@bizchat/types';
-import { BellRing } from 'lucide-react';
+import { BellRing, Volume2, VolumeX } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { offerSoundEnabled, setOfferSoundEnabled } from '../lib/offer-alert';
 import { AnswerList } from './intake-answers';
 import { Button } from './ui/button';
 
@@ -19,6 +20,7 @@ export function OfferTray({
   onDecline: (offer: ConversationOfferEvent) => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
+  const [sound, setSound] = useState(offerSoundEnabled);
   useEffect(() => {
     if (offers.length === 0) return;
     const timer = window.setInterval(() => setNow(Date.now()), 500);
@@ -29,6 +31,20 @@ export function OfferTray({
   if (live.length === 0) return null;
   return (
     <div className="space-y-2 border-b border-line bg-amber-50/60 p-3" aria-live="assertive">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => {
+            setOfferSoundEnabled(!sound);
+            setSound(!sound);
+          }}
+          className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-800"
+          aria-pressed={!sound}
+        >
+          {sound ? <Volume2 size={13} /> : <VolumeX size={13} />}
+          {sound ? 'Sound on' : 'Sound off'}
+        </button>
+      </div>
       {live.map((offer) => {
         const total = new Date(offer.expiresAt).getTime() - new Date(offer.offeredAt).getTime();
         const remaining = Math.max(0, new Date(offer.expiresAt).getTime() - now);
@@ -42,9 +58,12 @@ export function OfferTray({
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-sm font-semibold">
                 <BellRing size={15} className="text-amber-600" /> New chat
-                {offer.conversation.departmentName ? (
+                {offer.conversation.departmentName || offer.conversation.topicName ? (
                   <span className="text-xs font-normal text-slate-500">
-                    · {offer.conversation.departmentName}
+                    ·{' '}
+                    {[offer.conversation.departmentName, offer.conversation.topicName]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </span>
                 ) : null}
               </span>

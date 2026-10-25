@@ -68,6 +68,7 @@ import {
   type ConversationWaitOptionsApplicationEvent,
 } from '../routing/routing-events';
 import { QueueWaitService } from '../routing/queue-wait.service';
+import { RedisService } from '../realtime/redis.service';
 import { ConversationRoutingService } from '../routing/conversation-routing.service';
 import { IntakeService } from '../intake/intake.service';
 import {
@@ -158,6 +159,7 @@ export class WidgetGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly routing: ConversationRoutingService,
     private readonly intake: IntakeService,
     private readonly waits: QueueWaitService,
+    private readonly redis: RedisService,
   ) {}
 
   public async handleConnection(client: WidgetSocket): Promise<void> {
@@ -466,6 +468,12 @@ export class WidgetGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @OnEvent(AGENT_PRESENCE_EVENT)
   public async broadcastAvailability(event: AgentPresenceApplicationEvent): Promise<void> {
     const availability = await this.profiles.businessAvailability(event.businessId);
+    // Shared across instances: only a change is broadcast, whichever instance sees it first.
+    const summary = `${availability.availability}:${availability.onlineAgents}`;
+    const previous = await this.redis
+      .set(`widget:availability:${event.businessId}`, summary, 'EX', 3_600, 'GET')
+      .catch(() => null);
+    if (previous === summary) return;
     this.server
       .to(this.businessWidgetRoom(event.businessId))
       .emit('business.presence', { ...availability, changedAt: new Date().toISOString() });
