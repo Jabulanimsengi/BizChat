@@ -22,17 +22,19 @@ Create a key in **Dashboard → Integrations**, selecting only the permissions y
 Base URL: `https://YOUR_API_HOST/api/v1/integrations`.
 OpenAPI: `https://YOUR_API_HOST/api/v1/integrations/openapi.json`.
 
-| Operation                                                        | Scope               |
-| ---------------------------------------------------------------- | ------------------- |
-| GET /conversations                                               | conversations:read  |
-| GET /conversations/:id                                           | conversations:read  |
-| GET /conversations/:id/messages                                  | messages:read       |
-| POST /conversations                                              | conversations:write |
-| POST /conversations/:id/messages                                 | messages:write      |
-| POST /conversations/:id/resolve                                  | conversations:write |
-| POST /customers/identify                                         | customers:identify  |
-| Pre-chat answers and follow-up contact on GET /conversations/:id | intake:read         |
-| GET /availability                                                | availability:read   |
+| Operation                                                        | Scope                       |
+| ---------------------------------------------------------------- | --------------------------- |
+| GET /conversations                                               | conversations:read          |
+| GET /conversations/:id                                           | conversations:read          |
+| GET /conversations/:id/messages                                  | messages:read               |
+| POST /conversations                                              | conversations:write         |
+| POST /conversations/:id/messages                                 | messages:write              |
+| POST /conversations/:id/resolve                                  | conversations:write         |
+| POST /customers/identify                                         | customers:identify          |
+| Pre-chat answers and follow-up contact on GET /conversations/:id | intake:read                 |
+| GET /availability                                                | availability:read           |
+| Setup endpoints (docs/api/setup.md)                              | setup:read, setup:write     |
+| POST /privacy/customers/export, /erase (docs/api/privacy.md)     | privacy:read, privacy:write |
 
 Conversations include `priority`, `departmentId`, `topicId`, `overflowLevel`, and
 `followUpRequested`. With `intake:read`, `followUp` adds when the visitor asked to be contacted and the

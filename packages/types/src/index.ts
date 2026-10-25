@@ -239,6 +239,40 @@ export interface IntegrationAvailabilityResponse {
   checkedAt: string;
 }
 
+export interface PrivacySettingsResponse {
+  /** Resolved or closed conversations older than this many days are deleted; null keeps them. */
+  conversationRetentionDays: number | null;
+}
+
+/** Everything held about one visitor or customer, for a data subject access request. */
+export interface VisitorDataExport {
+  exportedAt: string;
+  visitor: { id: string; createdAt: string; lastSeenAt: string };
+  customer: { externalId: string; displayName: string | null; email: string | null } | null;
+  conversations: {
+    id: string;
+    status: ConversationStatus;
+    createdAt: string;
+    resolvedAt: string | null;
+    topic: string | null;
+    followUpContact: FollowUpContact | null;
+    intake: IntakeAnswer[] | null;
+    messages: { senderType: string; content: string | null; createdAt: string }[];
+    attachments: {
+      originalFileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      createdAt: string;
+    }[];
+  }[];
+}
+
+export interface VisitorErasureResponse {
+  visitorId: string;
+  conversationsDeleted: number;
+  attachmentsDeleted: number;
+}
+
 export interface TopicTestResponse {
   decision: ClassificationDecision;
   confidence: number;

@@ -1,4 +1,5 @@
 import { DashboardFrame } from '../../../components/dashboard-frame';
+import { PrivacySettings } from '../../../components/privacy-settings';
 import { SettingsManager } from '../../../components/settings-manager';
 
 export default function SettingsPage() {
@@ -8,7 +9,10 @@ export default function SettingsPage() {
       title="Business and widget settings"
       description="Manage tenant identity, visitor messaging, routing behavior, and timezone-aware operating hours."
     >
-      <SettingsManager />
+      <div className="space-y-6">
+        <SettingsManager />
+        <PrivacySettings />
+      </div>
     </DashboardFrame>
   );
 }

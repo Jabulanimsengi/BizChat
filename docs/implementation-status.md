@@ -490,3 +490,26 @@ timers. A new end-to-end harness, `phaseC-sdk-smoke.mjs`, drives the built SDK a
 replayed, classification, send, history, resolve, an identity proof, and an invalid key), and the
 full end-to-end suite passes. Webhook delivery to a real receiver is not part of the harness, because
 endpoints must be public HTTPS hosts.
+
+## Phase D1 - Retention and data subject requests (POPIA) — 2026-10-25
+
+- Per-tenant retention (**Dashboard → Settings → Data retention**, 30-3650 days or keep): an hourly
+  single-instance sweep deletes resolved and closed conversations unchanged for longer, with their
+  messages, files (objects first, then rows), form answers, timeline, and the copies held for webhook
+  retries and idempotent replays.
+- Access and erasure for one visitor: from a conversation in the inbox (owners and admins), or by
+  external ID through the integration API with the new `privacy:read` and `privacy:write` scopes.
+  Export excludes staff-only internal notes. Erasure needs explicit confirmation, is refused while a
+  conversation is open, and removes the visitor, sessions, and customer mapping. Audit entries hold
+  counts and IDs only. See `docs/api/privacy.md`, including the note on backups.
+- Migration `20261025140000_phase_d_privacy` adds `privacy_settings` (with a 30-3650 check) and an
+  index for finding finished conversations by age.
+
+Verification: format, lint, and type checks pass in every workspace; 228 API unit tests (including
+the sweep's lease and per-tenant isolation) and 20 dashboard tests pass. On a fresh Docker test stack
+all 23 migrations apply and all 42 HTTP tests pass, including a new privacy suite: retention bounds;
+export without notes; erasure blocked while open and without confirmation, then leaving no
+conversation, visitor, customer mapping, attachment object, webhook or replay copy, or personal data
+in the audit entry; retention deleting only expired finished chats even when a file object is
+already missing; and tenant and scope boundaries. The end-to-end suite passes. The new dashboard
+controls were type-checked but not used in a browser yet.

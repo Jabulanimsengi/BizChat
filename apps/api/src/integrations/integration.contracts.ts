@@ -13,6 +13,9 @@ export const integrationScopes = [
   // Setup API: departments, skills, topics, forms, routing settings, hours, and consultant routing.
   'setup:read',
   'setup:write',
+  // Data subject requests (POPIA): export or erase everything about one customer.
+  'privacy:read',
+  'privacy:write',
 ] as const;
 export const webhookEvents = [
   'conversation.created',
@@ -87,6 +90,12 @@ export const webhookSchema = z
       .transform((items) => [...new Set(items)]),
   })
   .strict();
+export const customerPrivacySchema = z
+  .object({ externalId: z.string().trim().min(1).max(200) })
+  .strict();
+export const customerErasureSchema = customerPrivacySchema
+  .extend({ confirm: z.literal(true) })
+  .strict();
 export const idempotencySchema = z.string().regex(/^[A-Za-z0-9_.:-]{8,128}$/);
 export type IntegrationScope = (typeof integrationScopes)[number];
 export interface IntegrationPrincipal {
@@ -95,6 +104,7 @@ export interface IntegrationPrincipal {
   scopes: string[];
 }
 export type KeyInput = z.infer<typeof keySchema>;
+export type CustomerPrivacyInput = z.infer<typeof customerPrivacySchema>;
 export type PageInput = z.infer<typeof pageSchema>;
 export type HistoryInput = z.infer<typeof historySchema>;
 export type StartInput = z.infer<typeof startSchema>;

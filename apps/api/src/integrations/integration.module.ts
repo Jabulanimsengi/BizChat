@@ -20,6 +20,8 @@ import { DepartmentModule } from '../departments/department.module';
 import { RoutingConfigModule } from '../routing-config/routing-config.module';
 import { BusinessUsersModule } from '../users/business-users.module';
 import { SetupContextService, SetupController } from './setup.controller';
+import { PrivacyModule } from '../privacy/privacy.module';
+import { PrivacyIntegrationController } from './privacy-integration.controller';
 @Module({
   imports: [
     AuthModule,
@@ -31,12 +33,14 @@ import { SetupContextService, SetupController } from './setup.controller';
     DepartmentModule,
     RoutingConfigModule,
     BusinessUsersModule,
+    PrivacyModule,
   ],
   controllers: [
     IntegrationController,
     IntegrationSettingsController,
     IntegrationDocumentationController,
     SetupController,
+    PrivacyIntegrationController,
   ],
   providers: [
     IntegrationService,

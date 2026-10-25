@@ -587,6 +587,12 @@ export const setupConsultantSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
 
+export const updatePrivacySettingsSchema = z
+  .object({ conversationRetentionDays: z.number().int().min(30).max(3650).nullable() })
+  .strict();
+/** Erasure cannot be undone, so the request must say so explicitly. */
+export const eraseVisitorSchema = z.object({ confirm: z.literal(true) }).strict();
+
 export const auditLogQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
@@ -786,6 +792,7 @@ export type TopicTestInput = z.infer<typeof topicTestSchema>;
 export type UpdateBusinessHoursInput = z.infer<typeof updateBusinessHoursSchema>;
 export type CreateBusinessUserInput = z.infer<typeof createBusinessUserSchema>;
 export type SetupConsultantInput = z.infer<typeof setupConsultantSchema>;
+export type UpdatePrivacySettingsInput = z.infer<typeof updatePrivacySettingsSchema>;
 export type UpdateBusinessUserInput = z.infer<typeof updateBusinessUserSchema>;
 export type AuditLogQuery = z.infer<typeof auditLogQuerySchema>;
 export type MessageSendInput = z.infer<typeof messageSendSchema>;

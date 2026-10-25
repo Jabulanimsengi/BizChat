@@ -64,7 +64,7 @@ import {
   type IntegrationRequest,
 } from './integration.guard';
 
-type SetupRequest = IntegrationRequest & RequestWithId;
+export type SetupRequest = IntegrationRequest & RequestWithId;
 
 /** Consultant routing as the setup API shows it. */
 export interface SetupConsultant {

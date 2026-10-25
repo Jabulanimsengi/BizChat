@@ -245,6 +245,7 @@ model Business {
   skills                   Skill[]
   agentSkills              AgentSkill[]
   routingSettings          RoutingSettings?
+  privacySettings          PrivacySettings?
   conversationOffers       ConversationOffer[]
   topics                   Topic[]
   classifications          ConversationClassification[]
@@ -565,6 +566,17 @@ model AgentSkill {
   @@map("agent_skills")
 }
 
+/// Personal-data handling per tenant (POPIA): how long finished conversations are kept.
+model PrivacySettings {
+  businessId                String   @id @db.Uuid
+  // Resolved or closed conversations older than this are deleted with their attachments; null keeps them.
+  conversationRetentionDays Int?
+  updatedAt                 DateTime @updatedAt
+  business                  Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
+
+  @@map("privacy_settings")
+}
+
 model RoutingSettings {
   id                        String           @id @default(uuid()) @db.Uuid
   businessId                String           @unique @db.Uuid
@@ -763,6 +775,7 @@ model Conversation {
   @@index([status, nextOverflowAt])
   @@index([status, maxWaitAt])
   @@index([businessId, createdAt])
+  @@index([status, updatedAt])
   @@map("conversations")
 }
 

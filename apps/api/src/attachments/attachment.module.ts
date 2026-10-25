@@ -93,5 +93,6 @@ import {
           : new DisabledAttachmentScanner(),
     },
   ],
+  exports: [AttachmentStorageService],
 })
 export class AttachmentModule {}

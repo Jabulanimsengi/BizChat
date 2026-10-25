@@ -47,6 +47,7 @@ import { io, type Socket } from 'socket.io-client';
 import { API_ORIGIN, apiRequest } from '../lib/api';
 import { FollowUpDetails, waitFlags } from './follow-up-details';
 import { IntakeAnswers } from './intake-answers';
+import { VisitorPrivacy } from './visitor-privacy';
 import { playOfferChime } from '../lib/offer-alert';
 import { OfferTray } from './offer-tray';
 import { Button } from './ui/button';
@@ -1190,6 +1191,15 @@ export function ConversationManager() {
             </dl>
             <FollowUpDetails conversation={selected.conversation} />
             <IntakeAnswers conversationId={selected.conversation.id} />
+            <VisitorPrivacy
+              conversationId={selected.conversation.id}
+              status={selected.conversation.status}
+              onErased={() => {
+                const erasedId = selected.conversation.id;
+                setConversations((current) => current.filter(({ id }) => id !== erasedId));
+                setSelectedId(undefined);
+              }}
+            />
             <div className="mt-6 rounded-2xl border border-line bg-white p-4">
               <div className="flex items-center gap-2">
                 <Users size={16} className="text-moss" />
