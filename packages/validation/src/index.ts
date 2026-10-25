@@ -479,6 +479,25 @@ export const followUpRequestSchema = z
     path: ['email'],
   });
 
+const analyticsDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
+/** Inclusive local dates, at most 92 days apart. */
+export const analyticsQuerySchema = z
+  .object({
+    from: analyticsDate,
+    to: analyticsDate,
+    departmentId: z.string().uuid().optional(),
+    topicId: z.string().uuid().optional(),
+  })
+  .strict()
+  .refine((value) => value.from <= value.to, {
+    message: 'from must not be after to',
+    path: ['from'],
+  })
+  .refine((value) => Date.parse(value.to) - Date.parse(value.from) <= 91 * 86_400_000, {
+    message: 'Choose at most 92 days',
+    path: ['to'],
+  });
+
 export const topicTestSchema = z.object({ message: messageContentSchema }).strict();
 
 export const offerResponseSchema = z
@@ -775,6 +794,7 @@ export type ConversationSubscriptionInput = z.infer<typeof conversationSubscript
 export type TypingUpdateInput = z.infer<typeof typingUpdateSchema>;
 export type IntakeAnswersInput = z.infer<typeof intakeAnswersSchema>;
 export type IntakeFormSubmitInput = z.infer<typeof intakeFormSubmitSchema>;
+export type AnalyticsQueryInput = z.infer<typeof analyticsQuerySchema>;
 export type FollowUpRequestInput = z.infer<typeof followUpRequestSchema>;
 export type CreateIntakeFormInput = z.infer<typeof createIntakeFormSchema>;
 export type UpdateIntakeFormInput = z.infer<typeof updateIntakeFormSchema>;

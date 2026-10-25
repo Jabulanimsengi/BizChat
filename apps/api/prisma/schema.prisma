@@ -762,6 +762,7 @@ model Conversation {
   @@index([intakeStatus, intakeExpiresAt])
   @@index([status, nextOverflowAt])
   @@index([status, maxWaitAt])
+  @@index([businessId, createdAt])
   @@map("conversations")
 }
 

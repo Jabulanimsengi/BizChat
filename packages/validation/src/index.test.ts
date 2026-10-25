@@ -10,6 +10,7 @@ import {
   createDepartmentSchema,
   createDomainSchema,
   createTagSchema,
+  analyticsQuerySchema,
   followUpRequestSchema,
   internalNoteSchema,
   loginSchema,
@@ -463,6 +464,21 @@ describe('pre-chat form validation', () => {
     ).toBe(true);
     expect(followUpRequestSchema.safeParse({ conversationId, name: 'Thandi' }).success).toBe(false);
     expect(followUpRequestSchema.safeParse({ conversationId, phone: 'call me' }).success).toBe(
+      false,
+    );
+  });
+
+  it('accepts analytics ranges of local dates up to 92 days', () => {
+    expect(analyticsQuerySchema.safeParse({ from: '2026-08-01', to: '2026-10-31' }).success).toBe(
+      true,
+    );
+    expect(analyticsQuerySchema.safeParse({ from: '2026-08-01', to: '2026-11-01' }).success).toBe(
+      false,
+    );
+    expect(analyticsQuerySchema.safeParse({ from: '2026-10-21', to: '2026-10-20' }).success).toBe(
+      false,
+    );
+    expect(analyticsQuerySchema.safeParse({ from: '20/10/2026', to: '2026-10-21' }).success).toBe(
       false,
     );
   });

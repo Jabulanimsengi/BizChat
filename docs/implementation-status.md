@@ -4,7 +4,7 @@ Last updated: 2026-08-15
 
 ## Current phase
 
-Phase 11 - Hardening is complete. Phase 10 - Analytics remains the next feature work.
+Phase 11 - Hardening is complete. Phase 10 - Analytics is implemented (see below).
 
 ## Completed
 
@@ -405,3 +405,26 @@ integration tests pass; the end-to-end suite passes, including the two-node `pha
 HTTP suite against the same database first failed in two integration tests because of data left by
 earlier runs (the shared domain, and old pending webhook deliveries ahead of the test's own); the
 first is fixed, the second still assumes a fresh stack. The chime was not heard in a browser yet.
+
+## Phase 10 - Analytics — 2026-10-25
+
+- **Dashboard → Analytics** (owners, admins, supervisors through `analytics:view`): conversations
+  started in a range of the tenant's local days (7/30/90-day shortcuts, up to 92 days), filterable by
+  department and topic. Headline tiles for reach and abandonment rates, follow-ups and overflow,
+  median and 90th-percentile wait, first response and handle time, and the offer accept rate; a daily
+  volume chart with per-day hover details and a table view; breakdowns by topic, department, and
+  channel; topic-matching outcomes (including how often visitors changed an automatically chosen
+  topic); and a per-consultant table.
+- `GET /analytics/overview` and `GET /analytics/consultants` aggregate in PostgreSQL over one cohort
+  definition (`docs/api/analytics.md`). Internal notes do not count as a first response; cancelled
+  offers do not count against the accept rate. Migration `20261025120000_phase_10_analytics` adds an
+  index on `conversations(businessId, createdAt)`.
+- The bar colour (`#1f8a5f`) was checked with the palette validator (lightness band, chroma floor,
+  3:1 contrast); the brand green failed the chroma floor for chart marks.
+
+Verification: format, lint, and type checks pass in every workspace; 224 API unit tests, 21
+dashboard, and 32 validation tests pass. On a fresh Docker test stack all 21 migrations apply and all
+32 HTTP integration tests pass, including two analytics tests that seed a known history and check
+every figure exactly (local-day boundaries in Africa/Johannesburg, percentiles, notes excluded from
+first response, offer and classification counts, tenant isolation, and range validation). The
+end-to-end suite passes. The analytics page has not yet been viewed in a browser.

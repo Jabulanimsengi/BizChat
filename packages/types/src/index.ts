@@ -161,6 +161,72 @@ export interface ConversationWaitOptionsEvent {
   reason: 'MAX_WAIT';
 }
 
+/** Durations in seconds over the conversations that reached the measured point. */
+export interface AnalyticsDuration {
+  count: number;
+  medianSeconds: number | null;
+  p90Seconds: number | null;
+  averageSeconds: number | null;
+}
+
+export interface AnalyticsBreakdownRow {
+  id: string | null;
+  name: string;
+  conversations: number;
+  medianWaitSeconds: number | null;
+}
+
+/**
+ * Reporting over conversations created in a date range (the tenant's local days). Every figure
+ * refers to that cohort, so a chat created on the last day and resolved later still counts.
+ */
+export interface AnalyticsOverviewResponse {
+  from: string;
+  to: string;
+  timezone: string;
+  totals: {
+    conversations: number;
+    assigned: number;
+    resolved: number;
+    abandoned: number;
+    followUps: number;
+    overflowed: number;
+  };
+  daily: { date: string; created: number; resolved: number; abandoned: number }[];
+  waitToAssignment: AnalyticsDuration;
+  firstResponse: AnalyticsDuration;
+  handleTime: AnalyticsDuration;
+  offers: {
+    offered: number;
+    accepted: number;
+    declined: number;
+    expired: number;
+    cancelled: number;
+    acceptRate: number | null;
+  };
+  bySource: { source: ConversationSource; conversations: number }[];
+  byTopic: AnalyticsBreakdownRow[];
+  byDepartment: AnalyticsBreakdownRow[];
+  classification: {
+    classified: number;
+    autoRouted: number;
+    confirmed: number;
+    asked: number;
+    defaulted: number;
+    /** Automatically routed or confirmed chats whose topic the visitor then changed. */
+    changedByVisitor: number;
+  };
+}
+
+export interface ConsultantAnalyticsRow {
+  agentProfileId: string;
+  displayName: string;
+  assigned: number;
+  resolved: number;
+  firstResponse: AnalyticsDuration;
+  offers: { offered: number; accepted: number; declined: number; expired: number };
+}
+
 export interface TopicTestResponse {
   decision: ClassificationDecision;
   confidence: number;

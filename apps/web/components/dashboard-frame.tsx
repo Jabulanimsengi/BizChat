@@ -2,6 +2,7 @@
 
 import type { AuthSessionResponse } from '@bizchat/types';
 import {
+  BarChart3,
   Globe2,
   Headphones,
   LayoutDashboard,
@@ -31,6 +32,7 @@ const navigation = [
   { icon: MessageSquareText, label: 'Conversations', href: '/dashboard/conversations' },
   { icon: Headphones, label: 'Consultants', href: '/dashboard/consultants' },
   { icon: Users, label: 'Departments', href: '/dashboard/departments' },
+  { icon: BarChart3, label: 'Analytics', href: '/dashboard/analytics', supervisor: true },
   { icon: Route, label: 'Routing', href: '/dashboard/routing', admin: true },
   { icon: MessageSquareQuote, label: 'Conversation tools', href: '/dashboard/conversation-tools' },
   { icon: Globe2, label: 'Websites', href: '/dashboard/domains', admin: true },
@@ -102,8 +104,13 @@ export function DashboardFrame({
       </main>
     );
 
-  const items = navigation.filter(
-    (item) => !('admin' in item) || ['OWNER', 'ADMIN'].includes(session.membership.role),
+  // Mirrors the API: analytics:view for supervisors and above, administration for owners and admins.
+  const items = navigation.filter((item) =>
+    'admin' in item
+      ? ['OWNER', 'ADMIN'].includes(session.membership.role)
+      : 'supervisor' in item
+        ? ['OWNER', 'ADMIN', 'SUPERVISOR'].includes(session.membership.role)
+        : true,
   );
 
   return (
