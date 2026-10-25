@@ -1,4 +1,5 @@
 import { DashboardFrame } from '../../../components/dashboard-frame';
+import { PlanUsage } from '../../../components/plan-usage';
 import { PrivacySettings } from '../../../components/privacy-settings';
 import { SettingsManager } from '../../../components/settings-manager';
 
@@ -11,6 +12,7 @@ export default function SettingsPage() {
     >
       <div className="space-y-6">
         <SettingsManager />
+        <PlanUsage />
         <PrivacySettings />
       </div>
     </DashboardFrame>

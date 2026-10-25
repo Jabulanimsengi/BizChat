@@ -1,3 +1,4 @@
+import { PlanService } from '../plans/plan.service';
 import {
   ConflictException,
   ForbiddenException,
@@ -118,6 +119,7 @@ export class ConversationService {
     private readonly intake: IntakeService,
     private readonly forms: IntakeFormService,
     private readonly hours: BusinessHoursService,
+    private readonly plans: PlanService,
   ) {}
 
   public async startVisitor(
@@ -293,6 +295,17 @@ export class ConversationService {
                   await this.forms.prefill(beforeChatForm, identity.visitorId),
                 )
               : null;
+            // The plan message is for the business; the visitor only learns that chat is unavailable.
+            await this.plans
+              .assertWithin(identity.businessId, 'conversations')
+              .catch((error: unknown) => {
+                throw error instanceof ForbiddenException
+                  ? new ForbiddenException({
+                      code: 'CHAT_UNAVAILABLE',
+                      message: 'Chat is not taking new conversations right now. Please try later.',
+                    })
+                  : error;
+              });
             conversation = await transaction.conversation.create({
               data: {
                 businessId: identity.businessId,

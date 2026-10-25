@@ -1,3 +1,4 @@
+import { PlanService } from '../plans/plan.service';
 import {
   ConflictException,
   Injectable,
@@ -47,6 +48,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly transport: WebhookTransport,
     config: ConfigService<Environment, true>,
+    private readonly plans: PlanService,
   ) {
     this.encryptionKey = createHash('sha256')
       .update(`bizchat.webhook.encryption.v1:${config.get('WIDGET_TOKEN_SECRET', { infer: true })}`)
@@ -81,6 +83,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     const secret = `whsec_${randomBytes(32).toString('base64url')}`;
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`webhook:${auth.business.id}`}, 0)) IS NULL AS acquired`;
+      await this.plans.assertWithin(auth.business.id, 'webhookEndpoints', tx);
       if (
         (await tx.webhookEndpoint.count({
           where: { businessId: auth.business.id, enabled: true },

@@ -273,6 +273,36 @@ export interface VisitorErasureResponse {
   attachmentsDeleted: number;
 }
 
+export type PlanMetric = 'consultants' | 'conversations' | 'integrationKeys' | 'webhookEndpoints';
+
+export interface PlanResponse {
+  id: string;
+  code: string;
+  name: string;
+  maxConsultants: number | null;
+  maxConversationsPerMonth: number | null;
+  maxIntegrationKeys: number | null;
+  maxWebhookEndpoints: number | null;
+  tenants: number;
+}
+
+/** A tenant's plan and what it has used; conversations count for the current UTC month. */
+export interface PlanUsageResponse {
+  plan: { code: string; name: string } | null;
+  period: string;
+  usage: Record<PlanMetric, { used: number; limit: number | null }>;
+}
+
+export interface PlatformTenantResponse {
+  id: string;
+  name: string;
+  slug: string;
+  status: 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'TRIAL';
+  createdAt: string;
+  planId: string | null;
+  usage: PlanUsageResponse['usage'];
+}
+
 export interface TopicTestResponse {
   decision: ClassificationDecision;
   confidence: number;
@@ -692,6 +722,8 @@ export interface MessageReceiptEvent {
 }
 
 export interface AuthSessionResponse {
+  /** True for platform administrators (PLATFORM_ADMIN_EMAILS), who manage plans and tenants. */
+  platformAdmin?: boolean;
   user: AuthenticatedUser;
   business: AuthenticatedBusiness;
   membership: { id: string; role: BusinessRole };

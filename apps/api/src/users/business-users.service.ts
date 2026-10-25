@@ -1,3 +1,4 @@
+import { PlanService } from '../plans/plan.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   CONVERSATION_CAPACITY_RELEASED_EVENT,
@@ -28,6 +29,7 @@ export class BusinessUsersService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly events: EventEmitter2,
+    private readonly plans: PlanService,
   ) {}
 
   public async list(businessId: string): Promise<BusinessUserResponse[]> {
@@ -49,6 +51,7 @@ export class BusinessUsersService {
     ipAddress?: string,
   ): Promise<BusinessUserResponse> {
     await this.validateDepartments(auth.business.id, input.departmentIds);
+    await this.plans.assertWithin(auth.business.id, 'consultants');
     const passwordHash = await hash(input.password, { type: 2 });
     try {
       const membership = await this.prisma.$transaction(async (transaction) => {
@@ -136,6 +139,8 @@ export class BusinessUsersService {
           message: 'The business must retain an active owner',
         });
     }
+    if (input.status === 'ACTIVE' && existing.status !== 'ACTIVE')
+      await this.plans.assertWithin(auth.business.id, 'consultants');
     if (input.departmentIds) await this.validateDepartments(auth.business.id, input.departmentIds);
     if (input.skills) await this.validateSkills(auth.business.id, input.skills);
     const updated = await this.prisma.$transaction(async (transaction) => {

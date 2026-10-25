@@ -47,8 +47,13 @@ export class AuthService {
         .slice(0, 60) || 'business';
     try {
       const created = await this.prisma.$transaction(async (transaction) => {
+        const planCode = this.config.get('NEW_TENANT_PLAN_CODE', { infer: true });
+        const plan = planCode
+          ? await transaction.plan.findUnique({ where: { code: planCode }, select: { id: true } })
+          : null;
         const business = await transaction.business.create({
           data: {
+            planId: plan?.id ?? null,
             name: input.businessName,
             slug: `${baseSlug}-${suffix}`,
             publicId: `pub_${randomBytes(18).toString('base64url')}`,

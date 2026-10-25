@@ -1,3 +1,4 @@
+import { PlanService } from '../plans/plan.service';
 import {
   BadRequestException,
   ConflictException,
@@ -65,6 +66,7 @@ export class IntegrationService {
     private readonly events: EventEmitter2,
     private readonly topics: TopicCatalogService,
     private readonly forms: IntakeFormService,
+    private readonly plans: PlanService,
   ) {}
 
   public async list(principal: IntegrationPrincipal, query: PageInput): Promise<object> {
@@ -170,6 +172,7 @@ export class IntegrationService {
           code: 'DEPARTMENT_NOT_FOUND',
           message: 'Department not found',
         });
+      await this.plans.assertWithin(principal.businessId, 'conversations', tx);
       const conversation = await tx.conversation.create({
         data: {
           businessId: principal.businessId,

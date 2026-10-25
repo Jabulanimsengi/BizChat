@@ -3,6 +3,7 @@
 import type { AuthSessionResponse } from '@bizchat/types';
 import {
   BarChart3,
+  Building2,
   Globe2,
   Headphones,
   LayoutDashboard,
@@ -40,6 +41,7 @@ const navigation = [
   { icon: UserCog, label: 'Users', href: '/dashboard/users', admin: true },
   { icon: ScrollText, label: 'Audit logs', href: '/dashboard/audit-logs', admin: true },
   { icon: Settings, label: 'Settings', href: '/dashboard/settings', admin: true },
+  { icon: Building2, label: 'Platform', href: '/dashboard/platform', platform: true },
 ] as const;
 
 export function DashboardFrame({
@@ -106,11 +108,13 @@ export function DashboardFrame({
 
   // Mirrors the API: analytics:view for supervisors and above, administration for owners and admins.
   const items = navigation.filter((item) =>
-    'admin' in item
-      ? ['OWNER', 'ADMIN'].includes(session.membership.role)
-      : 'supervisor' in item
-        ? ['OWNER', 'ADMIN', 'SUPERVISOR'].includes(session.membership.role)
-        : true,
+    'platform' in item
+      ? session.platformAdmin === true
+      : 'admin' in item
+        ? ['OWNER', 'ADMIN'].includes(session.membership.role)
+        : 'supervisor' in item
+          ? ['OWNER', 'ADMIN', 'SUPERVISOR'].includes(session.membership.role)
+          : true,
   );
 
   return (

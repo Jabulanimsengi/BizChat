@@ -37,6 +37,18 @@ const environmentSchema = z
     TYPING_TTL_SECONDS: z.coerce.number().int().min(3).max(30).default(6),
     RELIABILITY_SWEEP_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(5_000),
     RELIABILITY_RETRY_BASE_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
+    // Plan code given to newly registered businesses; empty means no plan limits.
+    NEW_TENANT_PLAN_CODE: z.string().trim().max(40).default(''),
+    // Verified accounts allowed into the platform administration area (comma-separated emails).
+    PLATFORM_ADMIN_EMAILS: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((email) => email.trim().toLowerCase())
+          .filter(Boolean),
+      ),
     // Retention deletes are not urgent; hourly keeps each run small.
     RETENTION_SWEEP_INTERVAL_MS: z.coerce
       .number()

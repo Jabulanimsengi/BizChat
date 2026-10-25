@@ -37,6 +37,8 @@ const environment = {
   CLAMAV_PORT: process.env.CLAMAV_PORT ?? '53310',
   // The Phase 3-9 harnesses exercise direct assignment; the offer harness switches its own tenant.
   NEW_TENANT_ASSIGNMENT_MODE: 'AUTO',
+  // The plans harness signs in as this platform administrator.
+  PLATFORM_ADMIN_EMAILS: 'platform-admin-e2e@example.test',
   ...process.env,
 };
 
@@ -52,6 +54,7 @@ const singleNodePhases = [
   'phaseB4-smoke.mjs',
   'phaseB5-smoke.mjs',
   'phaseC-sdk-smoke.mjs',
+  'phaseD-plans-smoke.mjs',
 ];
 
 const redis = new Redis(environment.REDIS_URL);

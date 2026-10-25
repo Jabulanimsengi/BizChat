@@ -513,3 +513,29 @@ conversation, visitor, customer mapping, attachment object, webhook or replay co
 in the audit entry; retention deleting only expired finished chats even when a file object is
 already missing; and tenant and scope boundaries. The end-to-end suite passes. The new dashboard
 controls were type-checked but not used in a browser yet.
+
+## Phase D2 - Plans, usage, and limits — 2026-10-25
+
+- Plans hold optional limits for users, conversations per UTC month, integration keys, and webhook
+  endpoints; there is no billing. `free`, `starter`, and `business` plans are created to edit.
+  Businesses without a plan (all existing ones) have no limits; `NEW_TENANT_PLAN_CODE` sets the plan
+  for new registrations.
+- Conversations are metered by a database trigger, so every channel counts the same way. Limits are
+  checked before creating a conversation (widget and API), a user or reactivated user, a key, or a
+  webhook, returning `403 PLAN_LIMIT_REACHED`; visitors see a neutral `CHAT_UNAVAILABLE` message.
+- Platform administrators (verified accounts listed in `PLATFORM_ADMIN_EMAILS`) get
+  **Dashboard → Platform**: edit plans, assign plans, and suspend or restore businesses. Tenant
+  changes are written to that tenant's audit log. Owners and admins see their plan and usage in
+  **Settings**. See `docs/api/plans.md`.
+- Migration `20261025150000_phase_d_plans` adds `plans`, `usage_counters`, `businesses.planId`, and
+  the metering trigger. The new variables are in `.env.example`, `.env.production.example`, and the
+  production Compose file.
+
+Verification: format, lint, and type checks pass in every workspace; 231 API unit tests and 23
+dashboard tests pass. On a fresh Docker test stack all 24 migrations apply and all 46 HTTP tests pass,
+including a new plans suite (allowlist plus verification for platform admins, the default plan for
+new registrations, plan creation and assignment, key, conversation, and user limits, trigger
+metering, removing a plan, and suspension and restoration). `docker compose config` accepts the
+production file. The end-to-end suite passes, including the new `phaseD-plans-smoke.mjs` (a second
+widget chat refused with a neutral message on a one-conversation plan). The platform page was
+type-checked and unit-tested but not used in a browser yet.

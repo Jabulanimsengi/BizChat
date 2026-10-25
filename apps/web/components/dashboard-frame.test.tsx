@@ -16,8 +16,9 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-function sessionResponse(emailVerified: boolean, role = 'OWNER'): unknown {
+function sessionResponse(emailVerified: boolean, role = 'OWNER', platformAdmin = false): unknown {
   return {
+    platformAdmin,
     user: { id: 'user-1', email: 'owner@example.com', displayName: 'Owner', emailVerified },
     membership: { id: 'membership-1', role },
     business: {
@@ -32,11 +33,11 @@ function sessionResponse(emailVerified: boolean, role = 'OWNER'): unknown {
   };
 }
 
-function mockSession(emailVerified: boolean, role?: string): void {
+function mockSession(emailVerified: boolean, role?: string, platformAdmin?: boolean): void {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(sessionResponse(emailVerified, role)), {
+      new Response(JSON.stringify(sessionResponse(emailVerified, role, platformAdmin)), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       }),
@@ -75,6 +76,16 @@ describe('DashboardFrame', () => {
     expect(Boolean(screen.queryByRole('link', { name: 'Analytics' }))).toBe(visible);
     // Administration stays with owners and admins.
     expect(screen.queryByRole('link', { name: 'Routing' })).not.toBeInTheDocument();
+  });
+
+  it('links to platform administration only for platform administrators', async () => {
+    mockSession(true, 'OWNER', true);
+    render(
+      <DashboardFrame eyebrow="Ops" title="Overview" description="Everything at a glance">
+        <p>dashboard-content</p>
+      </DashboardFrame>,
+    );
+    expect(await screen.findByRole('link', { name: 'Platform' })).toBeInTheDocument();
   });
 
   it('prompts unverified users to confirm their email', async () => {

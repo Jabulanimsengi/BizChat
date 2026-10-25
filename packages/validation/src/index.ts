@@ -593,6 +593,42 @@ export const updatePrivacySettingsSchema = z
 /** Erasure cannot be undone, so the request must say so explicitly. */
 export const eraseVisitorSchema = z.object({ confirm: z.literal(true) }).strict();
 
+const planLimit = z.number().int().min(1).max(10_000_000).nullable();
+export const createPlanSchema = z
+  .object({
+    code: z.string().regex(/^[a-z][a-z0-9-]{1,39}$/, 'Use lowercase letters, digits, and hyphens'),
+    name: z.string().trim().min(2).max(80),
+    maxConsultants: planLimit.default(null),
+    maxConversationsPerMonth: planLimit.default(null),
+    maxIntegrationKeys: planLimit.default(null),
+    maxWebhookEndpoints: planLimit.default(null),
+  })
+  .strict();
+export const updatePlanSchema = z
+  .object({
+    name: z.string().trim().min(2).max(80).optional(),
+    maxConsultants: planLimit.optional(),
+    maxConversationsPerMonth: planLimit.optional(),
+    maxIntegrationKeys: planLimit.optional(),
+    maxWebhookEndpoints: planLimit.optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+export const updateTenantSchema = z
+  .object({
+    planId: z.string().uuid().nullable().optional(),
+    status: z.enum(['ACTIVE', 'SUSPENDED', 'CANCELLED', 'TRIAL']).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+export const platformTenantQuerySchema = z
+  .object({
+    search: z.string().trim().max(120).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    offset: z.coerce.number().int().min(0).max(100_000).default(0),
+  })
+  .strict();
+
 export const auditLogQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
@@ -793,6 +829,10 @@ export type UpdateBusinessHoursInput = z.infer<typeof updateBusinessHoursSchema>
 export type CreateBusinessUserInput = z.infer<typeof createBusinessUserSchema>;
 export type SetupConsultantInput = z.infer<typeof setupConsultantSchema>;
 export type UpdatePrivacySettingsInput = z.infer<typeof updatePrivacySettingsSchema>;
+export type CreatePlanInput = z.infer<typeof createPlanSchema>;
+export type UpdatePlanInput = z.infer<typeof updatePlanSchema>;
+export type UpdateTenantInput = z.infer<typeof updateTenantSchema>;
+export type PlatformTenantQuery = z.infer<typeof platformTenantQuerySchema>;
 export type UpdateBusinessUserInput = z.infer<typeof updateBusinessUserSchema>;
 export type AuditLogQuery = z.infer<typeof auditLogQuerySchema>;
 export type MessageSendInput = z.infer<typeof messageSendSchema>;

@@ -26,6 +26,7 @@ import { ConversationToolsModule } from './conversation-tools/conversation-tools
 import { BusinessHoursModule } from './business-hours/business-hours.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { PrivacyModule } from './privacy/privacy.module';
+import { PlanModule } from './plans/plan.module';
 import { BusinessUsersModule } from './users/business-users.module';
 import { AttachmentModule } from './attachments/attachment.module';
 import { MailModule } from './mail/mail.module';
@@ -65,6 +66,7 @@ import { RedisService } from './realtime/redis.service';
     BusinessHoursModule,
     AnalyticsModule,
     PrivacyModule,
+    PlanModule,
     BusinessUsersModule,
     AttachmentModule,
     ConversationModule,

@@ -215,6 +215,9 @@ model Business {
   status                   BusinessStatus               @default(TRIAL)
   timezone                 String                       @default("UTC") @db.VarChar(100)
   defaultLocale            String                       @default("en") @db.VarChar(35)
+  // Null means no plan limits (every tenant created before plans existed).
+  planId                   String?                      @db.Uuid
+  plan                     Plan?                        @relation(fields: [planId], references: [id], onDelete: Restrict)
   createdAt                DateTime                     @default(now())
   updatedAt                DateTime                     @updatedAt
   memberships              BusinessMembership[]
@@ -246,6 +249,7 @@ model Business {
   agentSkills              AgentSkill[]
   routingSettings          RoutingSettings?
   privacySettings          PrivacySettings?
+  usageCounters            UsageCounter[]
   conversationOffers       ConversationOffer[]
   topics                   Topic[]
   classifications          ConversationClassification[]
@@ -564,6 +568,35 @@ model AgentSkill {
   @@unique([agentProfileId, skillId])
   @@index([businessId, skillId, proficiency])
   @@map("agent_skills")
+}
+
+/// Limits a platform administrator assigns to tenants. Null limits are unlimited; no billing.
+model Plan {
+  id                       String     @id @default(uuid()) @db.Uuid
+  code                     String     @unique @db.VarChar(40)
+  name                     String     @db.VarChar(80)
+  maxConsultants           Int?
+  maxConversationsPerMonth Int?
+  maxIntegrationKeys       Int?
+  maxWebhookEndpoints      Int?
+  createdAt                DateTime   @default(now())
+  updatedAt                DateTime   @updatedAt
+  businesses               Business[]
+
+  @@map("plans")
+}
+
+/// Metered usage per tenant and UTC month, counted by database triggers so no write path is missed.
+model UsageCounter {
+  businessId String   @db.Uuid
+  // UTC month, YYYY-MM.
+  period     String   @db.Char(7)
+  metric     String   @db.VarChar(40)
+  count      Int      @default(0)
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
+
+  @@id([businessId, period, metric])
+  @@map("usage_counters")
 }
 
 /// Personal-data handling per tenant (POPIA): how long finished conversations are kept.
