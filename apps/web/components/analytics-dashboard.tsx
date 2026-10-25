@@ -384,7 +384,9 @@ function Breakdown({ title, rows }: { title: string; rows: AnalyticsBreakdownRow
 function DailyChart({ daily }: { daily: AnalyticsOverviewResponse['daily'] }) {
   const [hovered, setHovered] = useState<number>();
   const [asTable, setAsTable] = useState(false);
-  const peak = Math.max(1, ...daily.map((day) => day.created));
+  const busiest = Math.max(0, ...daily.map((day) => day.created));
+  // Scale against at least 1 so an empty range draws no bars rather than dividing by zero.
+  const peak = Math.max(1, busiest);
   const height = 160;
   const label = (date: string): string =>
     new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(
@@ -452,7 +454,7 @@ function DailyChart({ daily }: { daily: AnalyticsOverviewResponse['daily'] }) {
           </div>
           <div className="mt-1 flex justify-between text-[10px] text-slate-400">
             <span>{daily[0] ? label(daily[0].date) : ''}</span>
-            <span>peak {peak}</span>
+            <span>{busiest ? `busiest day: ${busiest}` : 'no conversations'}</span>
             <span>{daily.at(-1) ? label(daily.at(-1)!.date) : ''}</span>
           </div>
           {point ? (

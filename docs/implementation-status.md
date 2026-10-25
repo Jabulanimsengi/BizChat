@@ -562,3 +562,31 @@ Writing that test first failed with intermittent 502s: Docker Desktop's host gat
 unreachable IPv6 address, which nginx treated as extra peers. The test now uses the IPv4 gateway,
 and the production resolver already sets `ipv6=off`. The complete HA stack with built images has not
 been started; that belongs in staging.
+
+## Browser check of the new screens — 2026-10-25
+
+Checked in a real browser against local dev servers: the widget's topic button and topic
+confirmation, the follow-up offer when nobody is online, follow-up validation and confirmation, and
+the queue line switching to "You're next" after an overflow step; the inbox offer card with topic,
+the sound toggle, the Follow-up flag, topic and contact details in the side panel, and the visitor
+data controls; the topic editor's overflow steps and maximum wait; Settings with plan and usage and
+data retention; Platform with plans, tenant search, status, and plan selectors (after verifying the
+allowlisted account); and Analytics with real data, including the chart's hover details. Export and
+erase were not clicked in the browser (export downloads a file; both are covered by HTTP tests).
+
+Two defects found and fixed:
+
+- **Widget settings failed cross-origin (present since the initial commit).** The CORS rule treated
+  every path starting with `/api/v1/widget` as a public widget route, which also matched the
+  dashboard's `/api/v1/widget-settings`, so it lost credentials and PATCH. With the dashboard and
+  API on different origins, as in production, Settings could not load or save widget settings. The
+  rule now matches the `widget` path segment exactly; `test/cors.e2e-spec.ts` covers both policies.
+- **The analytics chart said "peak 1" with no data.** It now shows the busiest day's count, or "no
+  conversations".
+
+Verification: format, lint, and type checks pass in every workspace; 231 API unit and 23 dashboard
+tests pass; on a fresh Docker test stack all 24 migrations apply and all 49 HTTP tests pass; the
+end-to-end suite passes, including the two-node and failover tests. A first run of this
+verification failed one webhook HTTP test and could not regenerate Prisma: the browser-check API
+server was still running against the same database and holding Prisma's engine file. With it
+stopped, both passed.
