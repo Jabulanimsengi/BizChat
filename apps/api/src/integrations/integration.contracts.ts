@@ -10,6 +10,9 @@ export const integrationScopes = [
   'intake:read',
   // Who is online and whether the business is open, e.g. to show a chat button only when staffed.
   'availability:read',
+  // Setup API: departments, skills, topics, forms, routing settings, hours, and consultant routing.
+  'setup:read',
+  'setup:write',
 ] as const;
 export const webhookEvents = [
   'conversation.created',

@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { RoutingSettingsResponse } from '@bizchat/types';
 import type { UpdateRoutingSettingsInput } from '@bizchat/validation';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, auditActor } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 import { DEFAULT_ROUTING_SETTINGS } from './routing-settings.defaults';
@@ -70,7 +70,7 @@ export class RoutingSettingsService {
     });
     await this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action: 'routing.settings_updated',
       targetType: 'RoutingSettings',
       targetId: auth.business.id,

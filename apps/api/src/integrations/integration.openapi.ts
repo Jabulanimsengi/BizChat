@@ -81,6 +81,50 @@ function operation(
   };
 }
 const ref = (name: string): object => ({ $ref: `#/components/schemas/${name}` });
+
+/** Setup API: the dashboard's configuration contracts, for keys with setup:read or setup:write. */
+const anyBody = { type: 'object', description: 'See docs/api/setup.md for the fields.' };
+function setupOperation(summary: string, write: boolean, status = '200'): object {
+  return {
+    ...operation(summary, write ? 'setup:write' : 'setup:read', anyBody, [], undefined, status),
+    ...(write
+      ? {
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: anyBody } },
+          },
+        }
+      : {}),
+  };
+}
+const setupId = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', format: 'uuid' },
+};
+const setupPaths: Record<string, object> = Object.fromEntries(
+  (['departments', 'skills', 'topics', 'intake-forms'] as const).flatMap(
+    (resource): [string, object][] => [
+      [
+        `/setup/${resource}`,
+        {
+          get: setupOperation(`List ${resource}`, false),
+          post: setupOperation(`Create one of the ${resource}`, true, '201'),
+        },
+      ],
+      [
+        `/setup/${resource}/{id}`,
+        {
+          patch: {
+            ...setupOperation(`Update one of the ${resource}`, true),
+            parameters: [setupId],
+          },
+        },
+      ],
+    ],
+  ),
+);
 export const integrationOpenApi = {
   openapi: '3.1.0',
   info: {
@@ -190,6 +234,30 @@ export const integrationOpenApi = {
           },
         },
       ),
+    },
+    ...setupPaths,
+    '/setup/topics/test': {
+      post: setupOperation('Preview how a message would be classified', false),
+    },
+    '/setup/routing-settings': {
+      get: setupOperation('Read routing settings', false),
+      put: setupOperation('Update routing settings', true),
+    },
+    '/setup/business-hours': {
+      get: setupOperation('Read business hours', false),
+      put: setupOperation('Replace the weekly business hours', true),
+    },
+    '/setup/consultants': {
+      get: setupOperation('List consultants and how they are routed', false),
+    },
+    '/setup/consultants/{id}': {
+      patch: {
+        ...setupOperation(
+          "Set a consultant's departments, skills, capacity, or routing switch",
+          true,
+        ),
+        parameters: [setupId],
+      },
     },
     '/customers/identify': {
       post: operation(

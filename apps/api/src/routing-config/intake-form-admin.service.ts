@@ -2,7 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma, type IntakeForm } from '@prisma/client';
 import type { IntakeFormField, IntakeFormResponse } from '@bizchat/types';
 import type { CreateIntakeFormInput, UpdateIntakeFormInput } from '@bizchat/validation';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, auditActor } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 
@@ -95,7 +95,7 @@ export class IntakeFormAdminService {
   ): Promise<void> {
     return this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action,
       targetType: 'IntakeForm',
       targetId: formId,

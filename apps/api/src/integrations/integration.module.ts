@@ -16,6 +16,10 @@ import { WebhookTransport } from './webhook-transport';
 import { IntakeModule } from '../intake/intake.module';
 import { BusinessHoursModule } from '../business-hours/business-hours.module';
 import { AvailabilityService } from './availability.service';
+import { DepartmentModule } from '../departments/department.module';
+import { RoutingConfigModule } from '../routing-config/routing-config.module';
+import { BusinessUsersModule } from '../users/business-users.module';
+import { SetupContextService, SetupController } from './setup.controller';
 @Module({
   imports: [
     AuthModule,
@@ -24,11 +28,15 @@ import { AvailabilityService } from './availability.service';
     CustomerIdentityModule,
     IntakeModule,
     BusinessHoursModule,
+    DepartmentModule,
+    RoutingConfigModule,
+    BusinessUsersModule,
   ],
   controllers: [
     IntegrationController,
     IntegrationSettingsController,
     IntegrationDocumentationController,
+    SetupController,
   ],
   providers: [
     IntegrationService,
@@ -37,6 +45,7 @@ import { AvailabilityService } from './availability.service';
     WebhookService,
     WebhookTransport,
     AvailabilityService,
+    SetupContextService,
   ],
 })
 export class IntegrationModule {}

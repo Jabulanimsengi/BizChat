@@ -20,6 +20,11 @@ export interface AuthContext {
     timezone: string;
     defaultLocale: string;
   };
+  /**
+   * Set when the caller is an integration key using the setup API rather than a signed-in person.
+   * There is then no user or membership: their IDs are empty and audit records name the key.
+   */
+  integrationKeyId?: string;
 }
 
 export interface AuthenticatedRequest extends Request {

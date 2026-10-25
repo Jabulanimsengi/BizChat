@@ -3,11 +3,14 @@ import type { Prisma } from '@prisma/client';
 import { NotFoundException } from '@nestjs/common';
 import type { AuditLogPage } from '@bizchat/types';
 import type { AuditLogQuery } from '@bizchat/validation';
+import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 
 export interface AuditInput {
   businessId: string;
   actorUserId?: string;
+  /** Kept in metadata: integration keys are not users, so they cannot be the audit actor. */
+  integrationKeyId?: string;
   action: string;
   targetType?: string;
   targetId?: string;
@@ -16,12 +19,28 @@ export interface AuditInput {
   metadata?: Prisma.InputJsonValue;
 }
 
+/** The audit actor for a request: the signed-in user, or the integration key using the setup API. */
+export function auditActor(auth: AuthContext): { actorUserId?: string; integrationKeyId?: string } {
+  return auth.integrationKeyId
+    ? { integrationKeyId: auth.integrationKeyId }
+    : { actorUserId: auth.user.id };
+}
+
 @Injectable()
 export class AuditService {
   public constructor(private readonly prisma: PrismaService) {}
 
-  public async record(input: AuditInput): Promise<void> {
-    await this.prisma.auditLog.create({ data: input });
+  public async record({ integrationKeyId, ...input }: AuditInput): Promise<void> {
+    const metadata =
+      integrationKeyId === undefined
+        ? input.metadata
+        : input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)
+          ? { ...input.metadata, integrationKeyId }
+          : {
+              ...(input.metadata === undefined ? {} : { value: input.metadata }),
+              integrationKeyId,
+            };
+    await this.prisma.auditLog.create({ data: { ...input, metadata } });
   }
 
   public async list(businessId: string, query: AuditLogQuery): Promise<AuditLogPage> {

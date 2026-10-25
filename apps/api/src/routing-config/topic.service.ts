@@ -3,7 +3,7 @@ import { Prisma, type Topic } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import type { TopicKeyword, TopicResponse, TopicTestResponse } from '@bizchat/types';
 import type { CreateTopicInput, UpdateTopicInput } from '@bizchat/validation';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, auditActor } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 import { TopicCatalogService } from '../intake/topic-catalog.service';
@@ -171,7 +171,7 @@ export class TopicService {
   ): Promise<void> {
     return this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action,
       targetType: 'Topic',
       targetId: topicId,

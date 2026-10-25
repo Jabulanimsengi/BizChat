@@ -13,6 +13,8 @@ const scopes = [
   'customers:identify',
   'intake:read',
   'availability:read',
+  'setup:read',
+  'setup:write',
 ];
 export const webhookEvents = [
   'conversation.created',

@@ -13,7 +13,7 @@ import { Prisma } from '@prisma/client';
 import { hash } from 'argon2';
 import type { BusinessUserResponse } from '@bizchat/types';
 import type { CreateBusinessUserInput, UpdateBusinessUserInput } from '@bizchat/validation';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, auditActor } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 
@@ -81,7 +81,7 @@ export class BusinessUsersService {
       });
       await this.audit.record({
         businessId: auth.business.id,
-        actorUserId: auth.user.id,
+        ...auditActor(auth),
         action: 'user.created',
         targetType: 'BusinessMembership',
         targetId: membership.id,
@@ -216,7 +216,7 @@ export class BusinessUsersService {
       } satisfies ConversationCapacityReleasedApplicationEvent);
     await this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action: 'user.updated',
       targetType: 'BusinessMembership',
       targetId: membershipId,

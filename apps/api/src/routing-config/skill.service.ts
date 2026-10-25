@@ -2,7 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import type { SkillResponse } from '@bizchat/types';
 import type { CreateSkillInput, UpdateSkillInput } from '@bizchat/validation';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, auditActor } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 
@@ -38,7 +38,7 @@ export class SkillService {
     );
     await this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action: 'skill.created',
       targetType: 'Skill',
       targetId: skill.id,
@@ -67,7 +67,7 @@ export class SkillService {
     );
     await this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action: 'skill.updated',
       targetType: 'Skill',
       targetId: skill.id,

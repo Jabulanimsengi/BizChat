@@ -14,7 +14,7 @@ import {
   CONVERSATION_CAPACITY_RELEASED_EVENT,
   type ConversationCapacityReleasedApplicationEvent,
 } from '../routing/routing-events';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, auditActor } from '../audit/audit.service';
 
 @Injectable()
 export class DepartmentService {
@@ -58,9 +58,12 @@ export class DepartmentService {
             where: { businessId: auth.business.id, isDefault: true },
             data: { isDefault: false },
           });
-        const profile = await transaction.agentProfile.findUnique({
-          where: { membershipId: auth.membership.id },
-        });
+        // A person creating a department joins it; an integration key is nobody to add.
+        const profile = auth.integrationKeyId
+          ? null
+          : await transaction.agentProfile.findUnique({
+              where: { membershipId: auth.membership.id },
+            });
         return transaction.department.create({
           data: {
             businessId: auth.business.id,
@@ -80,7 +83,7 @@ export class DepartmentService {
       });
       await this.audit.record({
         businessId: auth.business.id,
-        actorUserId: auth.user.id,
+        ...auditActor(auth),
         action: 'department.created',
         targetType: 'Department',
         targetId: department.id,
@@ -136,7 +139,7 @@ export class DepartmentService {
     });
     await this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action: 'department.updated',
       targetType: 'Department',
       targetId: department.id,
@@ -191,7 +194,7 @@ export class DepartmentService {
     } satisfies ConversationCapacityReleasedApplicationEvent);
     await this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action: 'user.departments_updated',
       targetType: 'BusinessMembership',
       targetId: auth.membership.id,

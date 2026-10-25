@@ -452,3 +452,23 @@ including a new suite that changes a conversation through each routing state and
 (ordering, consultant name, a rolled-back change leaving no event, unsubscribed events not enqueued,
 no contact details in payloads), the `intake:read` gate on follow-up details, and the availability
 scope. The existing webhook signing, retry, and replay tests still pass. The end-to-end suite passes.
+
+## Phase C2 - Setup API — 2026-10-25
+
+- New key scopes `setup:read` and `setup:write` (offered in **Dashboard → Integrations**) expose
+  `/integrations/setup/*`: departments, skills, topics (with a classification preview), pre-chat
+  forms, routing settings, business hours, and consultants' routing (departments, skills, capacity,
+  routing switch). See `docs/api/setup.md`.
+- The endpoints call the dashboard's configuration services with an integration context, so the
+  rules are identical. A key acts as an administrator without a person: it cannot create users or
+  change roles, names, passwords, account status, or an owner's account, and a department it
+  creates starts without members.
+- Audit records made by a key have no user actor and carry `integrationKeyId` in their metadata
+  (`auditActor` replaces direct `auth.user.id` use in the configuration services).
+- The integration OpenAPI document lists the setup paths.
+
+Verification: format, lint, and type checks pass in every workspace; 226 API unit tests (including
+audit attribution) and 20 dashboard tests pass; on a fresh Docker test stack all 22 migrations apply
+and all 38 HTTP tests pass, including a new setup suite (configuring a department, skill, topic,
+routing settings, and hours; key-attributed audit records; routing a consultant while rejecting role
+changes and owner edits; scope and tenant boundaries). The end-to-end suite passes.

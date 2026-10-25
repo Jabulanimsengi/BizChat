@@ -12,5 +12,6 @@ import { TopicService } from './topic.service';
   imports: [AuthModule, IntakeModule],
   controllers: [RoutingConfigController],
   providers: [SkillService, RoutingSettingsService, TopicService, IntakeFormAdminService],
+  exports: [SkillService, RoutingSettingsService, TopicService, IntakeFormAdminService],
 })
 export class RoutingConfigModule {}

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { BusinessHoursResponse } from '@bizchat/types';
 import type { UpdateBusinessHoursInput } from '@bizchat/validation';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, auditActor } from '../audit/audit.service';
 import type { AuthContext } from '../common/http.types';
 import { PrismaService } from '../database/prisma.service';
 
@@ -67,7 +67,7 @@ export class BusinessHoursService {
     );
     await this.audit.record({
       businessId: auth.business.id,
-      actorUserId: auth.user.id,
+      ...auditActor(auth),
       action: 'business.hours_updated',
       targetType: 'Business',
       targetId: auth.business.id,

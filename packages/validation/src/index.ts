@@ -569,6 +569,24 @@ export const updateBusinessUserSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
 
+/** What an integration may change about a consultant: routing only, never role, status, or name. */
+export const setupConsultantSchema = z
+  .object({
+    maxConcurrentChats: z.number().int().min(1).max(50).optional(),
+    routingEnabled: z.boolean().optional(),
+    departmentIds: z.array(z.string().uuid()).max(100).optional(),
+    skills: z
+      .array(agentSkillSchema)
+      .max(50)
+      .refine(
+        (skills) => new Set(skills.map(({ skillId }) => skillId)).size === skills.length,
+        'Each skill can be listed once',
+      )
+      .optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+
 export const auditLogQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
@@ -767,6 +785,7 @@ export type UpdateTopicInput = z.infer<typeof updateTopicSchema>;
 export type TopicTestInput = z.infer<typeof topicTestSchema>;
 export type UpdateBusinessHoursInput = z.infer<typeof updateBusinessHoursSchema>;
 export type CreateBusinessUserInput = z.infer<typeof createBusinessUserSchema>;
+export type SetupConsultantInput = z.infer<typeof setupConsultantSchema>;
 export type UpdateBusinessUserInput = z.infer<typeof updateBusinessUserSchema>;
 export type AuditLogQuery = z.infer<typeof auditLogQuerySchema>;
 export type MessageSendInput = z.infer<typeof messageSendSchema>;
